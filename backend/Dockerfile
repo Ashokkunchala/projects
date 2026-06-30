@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONNODEBUGRANGES=1
+
+# Install git for GitPython (repo cloning) and ca-certificates for HTTPS
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+COPY . .
+
+# Drop root — create a non-privileged user
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser \
+    && chown -R appuser:appgroup /app \
+    && mkdir -p /app/data && chown appuser:appgroup /app/data
+
+COPY entrypoint.sh /entrypoint.sh
+# Strip Windows CRLF line endings — belt-and-suspenders in case .gitattributes
+# was not applied before clone (e.g. older Git on Windows with autocrlf=true).
+# CRLF in a shell script causes "bad interpreter" inside the Linux container.
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+USER appuser
+
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]
