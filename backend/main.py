@@ -51,6 +51,19 @@ try:
 except ImportError:
     _GCP_AVAILABLE = False
 
+try:
+    import free_tier as _free_tier
+    _FREE_TIER_AVAILABLE = True
+except ImportError:
+    _FREE_TIER_AVAILABLE = False
+
+try:
+    import free_tier_usage as _free_tier_usage
+    import infra_visualizer as _infra_visualizer
+    _FEATURES_AVAILABLE = True
+except ImportError:
+    _FEATURES_AVAILABLE = False
+
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 8
@@ -1239,7 +1252,7 @@ async def analyze(req: AnalyzeRequest, user_info: dict = Depends(_verify_token))
 
     # Per-user concurrent analysis cap — prevents DoS flooding the queue
     _running = await db.get_running_analyses_for_user(user_id)
-    _running_ids = {a["analysis_id"] for a in (_running or [])}
+    _running_ids = {a["id"] for a in (_running or [])}
     if len(_running_ids) >= _MAX_ANALYSES_PER_USER:
         raise HTTPException(
             status_code=429,
@@ -1292,6 +1305,8 @@ async def ws_progress(websocket: WebSocket, analysis_id: str):
     if not in_flight:
         if saved and saved.get("analysis_result"):
             await websocket.send_json({"message": "Analysis complete!", "status": "complete", "data": saved["analysis_result"]})
+        elif saved and saved.get("status") == "failed":
+            await websocket.send_json({"message": saved.get("error_message", "Analysis failed"), "status": "error"})
         else:
             await websocket.send_json({"message": "Analysis not found", "status": "error"})
         return
@@ -1520,6 +1535,205 @@ async def health():
             content={"status": "degraded", "db": db_status, "redis": redis_status},
         )
     return {"status": "ok", "db": db_status, "redis": redis_status}
+
+
+# ─── Free Tier endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/free-tier")
+async def get_free_tier(provider: str = Query("all", pattern="^(all|aws|azure|gcp)$")):
+    """Get free tier information for cloud providers."""
+    if not _FREE_TIER_AVAILABLE:
+        return {"error": "Free tier module not available"}
+    return _free_tier.get_free_tier(provider)
+
+
+@app.get("/api/free-tier/summary")
+async def get_free_tier_summary(provider: str = Query("all", pattern="^(all|aws|azure|gcp)$")):
+    """Get a flat summary of all free tier services."""
+    if not _FREE_TIER_AVAILABLE:
+        return {"error": "Free tier module not available"}
+    return {"services": _free_tier.get_free_tier_summary(provider)}
+
+
+@app.get("/api/free-tier/check")
+async def check_free_tier_eligibility(
+    provider: str = Query("aws", pattern="^(aws|azure|gcp)$"),
+    resources: str = Query("[]", description="JSON array of resource types"),
+):
+    """Check free tier eligibility for scanned resources."""
+    if not _FREE_TIER_AVAILABLE:
+        return {"error": "Free tier module not available"}
+    try:
+        resource_list = _json.loads(resources)
+        return _free_tier.check_free_tier_eligibility(provider, resource_list)
+    except _json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid resources JSON")
+
+
+@app.get("/api/free-tier/usage/{provider}")
+async def get_free_tier_usage(provider: str, user_info: dict = Depends(_verify_token)):
+    """Get real-time free tier usage based on last scan results."""
+    try:
+        import free_tier_usage as _ft_usage
+    except ImportError:
+        return {"error": "Free tier usage module not available"}
+
+    # Get the user's most recent scan
+    analyses = await db.get_analyses_by_user(user_info["user_id"], limit=1)
+    if not analyses:
+        return {"error": "No scan results found. Run a scan first."}
+
+    latest = analyses[0]
+    result = latest.get("analysis_result") or latest.get("resources_scanned", 0)
+
+    # Try to get resources from the analysis result
+    resources = {}
+    if isinstance(result, dict):
+        # Reconstruct resources from issues if available
+        resources = _reconstruct_resources_from_analysis(result, provider)
+
+    return _ft_usage.get_free_tier_usage(provider, resources)
+
+
+def _reconstruct_resources_from_analysis(analysis_result: dict, provider: str) -> dict:
+    """Reconstruct resource data from analysis results."""
+    resources = {}
+
+    for issue in analysis_result.get("issues", []):
+        service = issue.get("service", "").lower()
+        if service not in resources:
+            resources[service] = []
+        resources[service].append({
+            "type": issue.get("issue_type", ""),
+            "name": issue.get("resource_name", ""),
+            "id": issue.get("resource_id", ""),
+            "region": issue.get("region", ""),
+        })
+
+    return resources
+
+
+# ─── Infrastructure Visualization endpoints ───────────────────────────────────
+
+class IaCParseRequest(BaseModel):
+    content: str = Field(min_length=10, max_length=100000)
+    file_type: str = Field(default="terraform", pattern="^(terraform|cloudformation)$")
+
+
+@app.post("/api/infra/parse")
+async def parse_infrastructure(req: IaCParseRequest, user_info: dict = Depends(_verify_token)):
+    """Parse Terraform or CloudFormation and return infrastructure diagram."""
+    try:
+        import infra_visualizer as _infra_viz
+    except ImportError:
+        return {"error": "Infrastructure visualizer module not available"}
+
+    result = _infra_viz.analyze_iac(req.content, req.file_type)
+    return result
+
+
+class ScanProjectRequest(BaseModel):
+    directory: str = Field(min_length=1, max_length=500)
+    max_depth: int = Field(default=5, ge=1, le=10)
+
+
+@app.post("/api/infra/scan-project")
+async def scan_project_directory(req: ScanProjectRequest, user_info: dict = Depends(_verify_token)):
+    """Scan a local project directory for Terraform/CloudFormation files."""
+    try:
+        import infra_visualizer as _infra_viz
+    except ImportError:
+        return {"error": "Infrastructure visualizer module not available"}
+
+    import os
+    directory = os.path.expanduser(req.directory)
+
+    if not os.path.exists(directory):
+        return {"error": f"Directory not found: {directory}"}
+    if not os.path.isdir(directory):
+        return {"error": f"Not a directory: {directory}"}
+
+    result = _infra_viz.scan_project_directory(directory, req.max_depth)
+    return result
+
+
+@app.get("/api/infra/scan-git")
+async def scan_git_repo(
+    repo_url: str = Query(..., description="Git repository URL"),
+    user_info: dict = Depends(_verify_token),
+):
+    """Clone and scan a Git repository for IaC files."""
+    try:
+        import infra_visualizer as _infra_viz
+        import git
+    except ImportError:
+        return {"error": "Infrastructure visualizer module not available"}
+
+    import tempfile
+    import os
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_path = os.path.join(tmpdir, "repo")
+            git.Repo.clone_from(repo_url, repo_path, depth=1)
+            result = _infra_viz.scan_project_directory(repo_path)
+            result['repo_url'] = repo_url
+            return result
+    except git.exc.GitCommandError as e:
+        return {"error": f"Failed to clone repository: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Error scanning repository: {str(e)}"}
+
+
+@app.post("/api/infra/validate")
+async def validate_infrastructure(req: IaCParseRequest, user_info: dict = Depends(_verify_token)):
+    """Validate infrastructure configuration and return recommendations."""
+    try:
+        import infra_visualizer as _infra_viz
+    except ImportError:
+        return {"error": "Infrastructure visualizer module not available"}
+
+    result = _infra_viz.analyze_iac(req.content, req.file_type)
+
+    # Add validation recommendations
+    recommendations = []
+    for resource in result.get("raw_resources", {}).values():
+        rtype = resource.get("type", "")
+
+        # Check for security issues
+        if rtype in ["aws_security_group", "azurerm_network_security_group"]:
+            config = resource.get("config", {})
+            if any("0.0.0.0/0" in str(v) for v in config.values()):
+                recommendations.append({
+                    "type": "security",
+                    "severity": "high",
+                    "resource": resource.get("name", ""),
+                    "message": "Security group allows traffic from 0.0.0.0/0. Restrict to specific IPs.",
+                })
+
+        # Check for cost optimization
+        if rtype == "aws_instance":
+            config = resource.get("config", {})
+            itype = config.get("instance_type", "")
+            if itype.startswith("t2."):
+                recommendations.append({
+                    "type": "cost",
+                    "severity": "low",
+                    "resource": resource.get("name", ""),
+                    "message": f"Consider upgrading from {itype} to t3 for better price-performance.",
+                })
+
+        # Check for free tier eligibility
+        if resource.get("free_tier_eligible"):
+            recommendations.append({
+                "type": "free_tier",
+                "severity": "info",
+                "resource": resource.get("name", ""),
+                "message": f"Resource is free tier eligible.",
+            })
+
+    result["recommendations"] = recommendations
+    return result
 
 
 # ─── AWS SSO endpoints ────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../AuthContext'
 import { useTheme } from '../ThemeContext'
-import { BarChart3, History, KeyRound, LogOut, Sun, Moon, Calculator, TrendingDown } from 'lucide-react'
+import { BarChart3, History, KeyRound, LogOut, Sun, Moon, Calculator, TrendingDown, Cloud, Activity, GitBranch } from 'lucide-react'
 import LinkedInBadge from './LinkedInBadge'
 
 export default function Navbar() {
@@ -70,6 +70,9 @@ export default function Navbar() {
             { to: '/',            Icon: BarChart3,    label: 'Dashboard' },
             { to: '/estimate',    Icon: Calculator,   label: 'Estimator' },
             { to: '/cost-reports', Icon: TrendingDown, label: 'Cost Reports' },
+            { to: '/free-tier',   Icon: Cloud,        label: 'Free Tier' },
+            { to: '/free-tier/usage', Icon: Activity, label: 'Usage' },
+            { to: '/infra-visualizer', Icon: GitBranch, label: 'Infra Viz' },
             { to: '/history',     Icon: History,      label: 'History'   },
           ].map(({ to, Icon, label }) => (
             <Link key={to} to={to}

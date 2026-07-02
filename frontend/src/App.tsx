@@ -7,7 +7,10 @@ import ChangePassword from './pages/ChangePassword'
 import CostReports from './pages/CostReports'
 import Dashboard from './pages/Dashboard'
 import Estimate from './pages/Estimate'
+import FreeTier from './pages/FreeTier'
+import FreeTierUsage from './pages/FreeTierUsage'
 import History from './pages/History'
+import InfraVisualizer from './pages/InfraVisualizer'
 import Login from './pages/Login'
 import Report from './pages/Report'
 import Signup from './pages/Signup'
@@ -43,6 +46,9 @@ export default function App() {
             <Route path="/" element={<Private><Dashboard /></Private>} />
             <Route path="/estimate" element={<Private><Estimate /></Private>} />
             <Route path="/cost-reports" element={<Private><CostReports /></Private>} />
+            <Route path="/free-tier" element={<Private><FreeTier /></Private>} />
+            <Route path="/free-tier/usage" element={<Private><FreeTierUsage /></Private>} />
+            <Route path="/infra-visualizer" element={<Private><InfraVisualizer /></Private>} />
             <Route path="/analyze/:id" element={<Private><Analyze /></Private>} />
             <Route path="/report/:id" element={<Private><Report /></Private>} />
             <Route path="/history" element={<Private><History /></Private>} />

@@ -1,0 +1,112 @@
+MIT License with Additional Restrictions
+
+Copyright (c) 2024 Ashok Kumar. All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+1. ATTRIBUTION REQUIREMENT: Any copy or substantial portion of the Software
+   must include the following copyright notice and attribution:
+   "Copyright (c) 2024 Ashok Kumar - AI Cloud Cost Detective"
+   This attribution must appear in all copies, derivative works, and
+   documentation.
+
+2. COMMERCIAL USE RESTRICTION: The Software may NOT be used for commercial
+   purposes (selling the software, selling services based on the software,
+   or using the software in a commercial product) without explicit written
+   permission from the copyright holder (Ashok Kumar). Commercial use
+   includes but is not limited to:
+   - Selling the software or derivative works
+   - Offering SaaS services based on the software
+   - Using the software in a commercial product or service
+   - Charging fees for access to or use of the software
+
+3. MODIFICATION NOTICE: Any modified version must be clearly labeled as such,
+   and must not be represented as the original software. Modified versions
+   must include prominent notices stating they were modified.
+
+4. NO WARRANTY: THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+   KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+5. SOURCE CODE INTEGRITY: Any distributed binary must also make the source
+   code available, and the source code must include this license.
+
+6. NO TRADEMARK LICENSE: This license does not grant permission to use the
+   trade names, trademarks, service marks, or product names of the
+   copyright holder, except as required for reasonable and customary use
+   in describing the origin of the work.
+
+7. PROPRIETARY COMPONENTS: The following components are proprietary and
+   may NOT be distributed, modified, or reverse-engineered:
+   - AI analysis algorithms and prompts
+   - Cost estimation models and pricing data
+   - Cloud scanning patterns and detection logic
+   - Frontend design, UI components, and styling
+
+8. API KEY STORAGE: Users must NOT store API keys, credentials, or secrets
+   in the codebase. All sensitive data must be provided at runtime through
+   environment variables or secure configuration.
+
+9. SECURITY AUDIT: Any deployment of this software must undergo security
+   review. The copyright holder is not responsible for security issues
+   arising from improper deployment.
+
+10. LICENSE VIOLATIONS: Any violation of these terms automatically
+    terminates the license granted herein. The copyright holder reserves
+    the right to pursue legal remedies for violations.
+
+This license applies to all versions, copies, and derivative works of the
+software. By using this software, you agree to be bound by these terms.
+
+For commercial licensing inquiries, contact: [Your Contact Information]
+
+---
+
+SPECIAL EXCEPTIONS:
+
+- Educational and research use is permitted with proper attribution
+- Personal non-commercial use is permitted with proper attribution
+- Open-source contributions to the project are welcome under this license
+- Bug reports and issues may be filed on the public repository
+
+---
+
+THIRD-PARTY LICENSES:
+
+This software includes components from third-party libraries, each with
+their own licenses. See the respective package files for details:
+
+Backend (Python):
+- FastAPI (MIT License)
+- boto3 (Apache License 2.0)
+- asyncpg (Apache License 2.0)
+- PyJWT (MIT License)
+- bcrypt (Apache License 2.0)
+
+Frontend (TypeScript/JavaScript):
+- React (MIT License)
+- Vite (MIT License)
+- Tailwind CSS (MIT License)
+
+Infrastructure:
+- Terraform (Business Source License 1.1)
+- Cloudflare Workers (Various)
+
+---
+
+ACKNOWLEDGMENTS:
+
+This project was developed by Ashok Kumar as a comprehensive cloud cost
+optimization platform. The AI-powered analysis, cost estimation algorithms,
+and cloud scanning logic represent significant intellectual property.
+
+For questions about licensing, permissions, or commercial use, please contact
+the copyright holder directly.

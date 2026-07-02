@@ -1,0 +1,81 @@
+# ─── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ─── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── Build Outputs ─────────────────────────────────────────────────────────────
+frontend/dist/
+backend/*.egg-info/
+
+# ─── IDE & Editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ─── Terraform ─────────────────────────────────────────────────────────────────
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.backup
+infrastructure/terraform/tfplan
+infrastructure/terraform/.terraform.lock.hcl
+
+# ─── Cloudflare ────────────────────────────────────────────────────────────────
+infrastructure/cloudflare/node_modules/
+infrastructure/cloudflare/.wrangler/
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+*.coverage
+
+# ─── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Secrets (NEVER commit these) ─────────────────────────────────────────────
+# AWS credentials
+.aws/
+credentials.json
+service-account*.json
+
+# Cloudflare
+.wrangler/
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

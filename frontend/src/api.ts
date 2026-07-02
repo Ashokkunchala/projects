@@ -437,3 +437,42 @@ export const cost = {
       body: JSON.stringify(_credBody(accessKey, secretKey, sessionToken)),
     }),
 }
+
+export const freeTier = {
+  get: (provider: string = 'all') =>
+    req<Record<string, unknown>>(`/free-tier?provider=${provider}`),
+
+  summary: (provider: string = 'all') =>
+    req<{ services: unknown[] }>(`/free-tier/summary?provider=${provider}`),
+
+  check: (provider: string, resources: unknown[] = []) =>
+    req<{ eligible: boolean; message: string }>(`/free-tier/check?provider=${provider}&resources=${encodeURIComponent(JSON.stringify(resources))}`),
+}
+
+export const freeTierUsage = {
+  get: (provider: string) =>
+    req<unknown>(`/free-tier/usage/${provider}`),
+}
+
+export const infraViz = {
+  parse: (content: string, fileType: string = 'terraform') =>
+    req<unknown>('/infra/parse', {
+      method: 'POST',
+      body: JSON.stringify({ content, file_type: fileType }),
+    }),
+
+  validate: (content: string, fileType: string = 'terraform') =>
+    req<unknown>('/infra/validate', {
+      method: 'POST',
+      body: JSON.stringify({ content, file_type: fileType }),
+    }),
+
+  scanProject: (directory: string, maxDepth: number = 5) =>
+    req<unknown>('/infra/scan-project', {
+      method: 'POST',
+      body: JSON.stringify({ directory, max_depth: maxDepth }),
+    }),
+
+  scanGit: (repoUrl: string) =>
+    req<unknown>(`/infra/scan-git?repo_url=${encodeURIComponent(repoUrl)}`),
+}

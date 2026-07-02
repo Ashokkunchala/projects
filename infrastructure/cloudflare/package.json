@@ -1,0 +1,26 @@
+{
+  "name": "cost-detective-agent",
+  "version": "1.0.0",
+  "description": "Cloudflare AI Agent for infrastructure analysis",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:prod": "wrangler deploy --env production",
+    "deploy:staging": "wrangler deploy --env staging",
+    "tail": "wrangler tail",
+    "db:init": "wrangler d1 execute cost-detective --file=schema.sql",
+    "db:init:staging": "wrangler d1 execute cost-detective-staging --file=schema.sql --remote",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.22.4",
+    "vitest": "^1.2.1"
+  },
+  "dependencies": {
+    "hono": "^4.0.10"
+  }
+}

@@ -1,0 +1,78 @@
+name = "cost-detective-agent"
+main = "src/index.ts"
+compatibility_date = "2024-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── Environment Configuration ────────────────────────────────────────────────
+
+[vars]
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
+ALLOWED_ORIGINS = "https://costdetective.app,https://www.costdetective.app"
+
+# ─── AI Configuration ─────────────────────────────────────────────────────────
+
+[[ai]]
+binding = "AI"
+
+# ─── KV Namespaces ────────────────────────────────────────────────────────────
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id"
+preview_id = "your-kv-preview-id"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "your-rate-limit-kv-id"
+preview_id = "your-rate-limit-kv-preview-id"
+
+# ─── D1 Databases ─────────────────────────────────────────────────────────────
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cost-detective"
+database_id = "your-d1-database-id"
+
+# ─── R2 Storage ───────────────────────────────────────────────────────────────
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "cost-detective-storage"
+
+# ─── Queues ───────────────────────────────────────────────────────────────────
+
+[[queues]]
+binding = "ANALYSIS_QUEUE"
+queue = "cost-detective-analysis"
+
+[[queues.producers]]
+binding = "ANALYSIS_QUEUE"
+queue = "cost-detective-analysis"
+
+[[queues.consumers]]
+queue = "cost-detective-analysis"
+max_retries = 3
+dead_letter_queue = "cost-detective-dlq"
+
+# ─── Environment Variables ────────────────────────────────────────────────────
+
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+[env.production.kv_namespaces]
+CACHE = { id = "prod-cache-id", preview_id = "prod-cache-preview-id" }
+RATE_LIMIT = { id = "prod-rate-limit-id", preview_id = "prod-rate-limit-preview-id" }
+
+[env.production.d1_databases]
+DB = { database_name = "cost-detective-prod", database_id = "prod-d1-id" }
+
+[env.staging]
+vars = { ENVIRONMENT = "staging", LOG_LEVEL = "debug" }
+
+[env.staging.kv_namespaces]
+CACHE = { id = "staging-cache-id", preview_id = "staging-cache-preview-id" }
+RATE_LIMIT = { id = "staging-rate-limit-id", preview_id = "staging-rate-limit-preview-id" }
+
+[env.staging.d1_databases]
+DB = { database_name = "cost-detective-staging", database_id = "staging-d1-id" }
