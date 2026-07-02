@@ -151,8 +151,8 @@ AI Cloud Cost Detective is a production-grade, open-source platform that helps o
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/ashokkumar-cse/AI-Cloud-Cost-Detective.git
-cd AI-Cloud-Cost-Detective
+git clone https://github.com/Ashokkunchala/projects.git
+cd projects
 
 # 2. Set up environment
 python3 -c "import secrets; print('POSTGRES_PASSWORD=' + secrets.token_hex(24))" > .env
@@ -177,8 +177,8 @@ API Docs:  http://localhost:8000/docs (when DEBUG=true)
 
 ```bash
 # Clone and setup
-git clone https://github.com/ashokkumar-cse/AI-Cloud-Cost-Detective.git
-cd AI-Cloud-Cost-Detective
+git clone https://github.com/Ashokkunchala/projects.git
+cd projects
 
 # Generate secure password
 python3 -c "import secrets; print('POSTGRES_PASSWORD=' + secrets.token_hex(24))" > .env
@@ -551,6 +551,221 @@ npx wrangler login
 npm run deploy:prod
 ```
 
+---
+
+## Cloudflare AI Integration
+
+### Overview
+
+The Cloudflare AI Agent provides enhanced infrastructure analysis using Llama 3.1 8B running on Cloudflare's edge network. This integration offers:
+
+- **Low Latency**: AI inference at the edge, closest to users
+- **Cost Effective**: Pay-per-use pricing with generous free tier
+- **Global Scale**: Automatically scales to handle any load
+- **Privacy**: Data stays within Cloudflare's network
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Cloudflare Edge Network                      │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │                    AI Agent Worker                         │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │ │
+│  │  │   Analyze   │  │  Validate   │  │   Explain   │       │ │
+│  │  │   Endpoint  │  │   Endpoint  │  │   Endpoint  │       │ │
+│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │ │
+│  │         └────────────────┼────────────────┘              │ │
+│  │                          ▼                               │ │
+│  │              ┌─────────────────────┐                     │ │
+│  │              │   Cloudflare AI     │                     │ │
+│  │              │   (Llama 3.1 8B)   │                     │ │
+│  │              └─────────────────────┘                     │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│  │    D1    │  │    KV    │  │    R2    │  │  Queues  │      │
+│  │ Database │  │  Cache   │  │ Storage  │  │  Workers │      │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Setup Instructions
+
+#### Step 1: Create Cloudflare Account
+
+1. Go to [cloudflare.com](https://dash.cloudflare.com/sign-up)
+2. Create a free account
+3. Enable Workers (free tier includes 100K requests/day)
+
+#### Step 2: Install Wrangler CLI
+
+```bash
+npm install -g wrangler
+
+# Login to Cloudflare
+npx wrangler login
+```
+
+#### Step 3: Create Resources
+
+```bash
+cd infrastructure/cloudflare
+
+# Create D1 database
+npx wrangler d1 create cost-detective
+# Note the database_id from output
+
+# Create KV namespaces
+npx wrangler kv:namespace create CACHE
+npx wrangler kv:namespace create RATE_LIMIT
+# Note the id values from output
+
+# Create R2 bucket
+npx wrangler r2 bucket create cost-detective-storage
+```
+
+#### Step 4: Update Configuration
+
+Edit `wrangler.toml` with your resource IDs:
+
+```toml
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-cache-kv-id"
+preview_id = "your-cache-kv-preview-id"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cost-detective"
+database_id = "your-d1-database-id"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "cost-detective-storage"
+```
+
+#### Step 5: Initialize Database
+
+```bash
+npm run db:init
+```
+
+#### Step 6: Deploy
+
+```bash
+# Deploy to staging
+npm run deploy:staging
+
+# Deploy to production
+npm run deploy:prod
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/agent/analyze` | POST | Analyze infrastructure code |
+| `/api/agent/validate` | POST | Security and compliance validation |
+| `/api/agent/explain` | POST | Plain English explanation |
+| `/api/agent/health` | GET | Health check |
+
+### Example Usage
+
+#### Analyze Infrastructure
+
+```bash
+curl -X POST https://your-worker.workers.dev/api/agent/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "analyze",
+    "content": "resource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}",
+    "file_type": "terraform",
+    "options": {
+      "focus": "all",
+      "provider": "aws"
+    }
+  }'
+```
+
+#### Validate Security
+
+```bash
+curl -X POST https://your-worker.workers.dev/api/agent/validate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "validate",
+    "content": "your terraform code here",
+    "file_type": "terraform"
+  }'
+```
+
+### Cost Estimation
+
+| Service | Free Tier | Paid |
+|---------|-----------|------|
+| Workers | 100K requests/day | $5/mo + $0.50/million |
+| D1 | 5GB storage, 5M reads/day | $0.75/GB stored |
+| KV | 100K reads/day | $0.50/million reads |
+| R2 | 10GB storage | $0.015/GB stored |
+| AI (Llama 3.1 8B) | 10K neurons/day | $0.011/1000 neurons |
+
+**Estimated monthly cost**: $5-20 for typical usage
+
+### Integration with Main Application
+
+The backend integrates with Cloudflare AI via HTTP calls. To enable:
+
+1. Set the Cloudflare Worker URL in `backend/.env`:
+
+```bash
+CLOUDFLARE_AI_URL=https://your-worker.workers.dev
+```
+
+2. The backend will automatically use Cloudflare AI for enhanced analysis when available, falling back to the built-in rule engine.
+
+### Monitoring
+
+View Worker logs:
+
+```bash
+npx wrangler tail
+```
+
+View D1 data:
+
+```bash
+npx wrangler d1 execute cost-detective --command "SELECT * FROM analyses LIMIT 10"
+```
+
+### Troubleshooting
+
+#### "Worker not found"
+
+```bash
+# Verify deployment
+npx wrangler deployments list
+
+# Check Worker status
+npx wrangler status
+```
+
+#### "D1 connection failed"
+
+```bash
+# Re-initialize database
+npm run db:init
+
+# Test connection
+npx wrangler d1 execute cost-detective --command "SELECT 1"
+```
+
+#### "AI model not available"
+
+- Ensure your Cloudflare account has AI enabled
+- Check [Cloudflare AI Models](https://developers.cloudflare.com/workers-ai/models/) for available models
+- Verify the model name in `src/index.ts`
+
 ### Environment-Specific Configs
 
 | Environment | Database | Cache | AI |
@@ -647,7 +862,7 @@ docker compose logs -f postgres
 
 ### Development Setup
 
-1. Fork the repository
+1. Fork the repository from [GitHub](https://github.com/Ashokkunchala/projects)
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes
 4. Run tests: `pytest tests/` (backend), `npm test` (frontend)
@@ -693,21 +908,21 @@ For commercial licensing inquiries, contact the author.
 
 ## Author
 
-**Ashok Kumar**
-- GitHub: [@ashokkumar-cse](https://github.com/ashokkumar-cse)
-- Email: [Your Email]
+**Ashok Kunchala**
+- GitHub: [@Ashokkunchala](https://github.com/Ashokkunchala)
+- Repository: [AI Cloud Cost Detective](https://github.com/Ashokkunchala/projects)
 
 ### Acknowledgments
 
-This project was developed as a comprehensive cloud cost optimization platform. The AI-powered analysis, cost estimation algorithms, and cloud scanning logic represent significant intellectual property.
+This project was developed by Ashok Kunchala as a comprehensive cloud cost optimization platform. The AI-powered analysis, cost estimation algorithms, cloud scanning logic, and Cloudflare AI integration represent significant intellectual property.
 
 ---
 
 ## Support
 
 - 📖 Documentation: [README.md](README.md)
-- 🐛 Issues: [GitHub Issues](https://github.com/ashokkumar-cse/AI-Cloud-Cost-Detective/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/ashokkumar-cse/AI-Cloud-Cost-Detective/discussions)
+- 🐛 Issues: [GitHub Issues](https://github.com/Ashokkunchala/projects/issues)
+- 💬 Discussions: [GitHub Discussions](https://github.com/Ashokkunchala/projects/discussions)
 
 ---
 
