@@ -51,7 +51,11 @@ export default function SSOAuth({ onComplete, onCancel }: Props) {
   const [pickError, setPickError] = useState('')
 
   // ── Existing creds ─────────────────────────────────────────────────
-  const existing = loadSSOCreds()
+  const [existing, setExisting] = useState<SSOCredential[] | null>(null)
+
+  useEffect(() => {
+    loadSSOCreds().then(setExisting).catch(() => setExisting(null))
+  }, [])
 
   // Cleanup intervals on unmount
   useEffect(() => {
@@ -82,9 +86,9 @@ export default function SSOAuth({ onComplete, onCancel }: Props) {
           try {
             const { accounts: raw } = await sso.accounts(sid)
             setAccounts(
-              raw.map((a) => ({
+              (raw || []).map((a) => ({
                 ...a,
-                selectedRole: a.roles[0] ?? '',
+                selectedRole: a.roles?.[0] ?? '',
                 checked: true,
               }))
             )
@@ -139,7 +143,7 @@ export default function SSOAuth({ onComplete, onCancel }: Props) {
         setPickError(`Could not get credentials: ${errors.join('; ')}`)
         return
       }
-      saveSSOCreds(credentials)
+      await saveSSOCreds(credentials)
       setStep('done')
       onComplete(credentials)
     } catch (e: unknown) {
@@ -167,7 +171,7 @@ export default function SSOAuth({ onComplete, onCancel }: Props) {
   const seconds = timeLeft % 60
 
   // ── Existing session: already connected ───────────────────────────
-  if (existing && existing.length > 0 && step === 'init') {
+  if (existing !== null && existing.length > 0 && step === 'init') {
     return (
       <div className="space-y-4">
         <div className="rounded-xl p-4 flex items-start gap-3"

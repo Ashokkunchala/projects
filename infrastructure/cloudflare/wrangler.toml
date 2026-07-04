@@ -8,33 +8,38 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
-ALLOWED_ORIGINS = "https://costdetective.app,https://www.costdetective.app"
+ALLOWED_ORIGINS = "*"  # Restrict in production: "https://yourdomain.com"
 
 # ─── AI Configuration ─────────────────────────────────────────────────────────
 
-[[ai]]
+[ai]
 binding = "AI"
 
 # ─── KV Namespaces ────────────────────────────────────────────────────────────
+# Create with: npx wrangler kv:namespace create CACHE
+# Then replace the IDs below with your actual namespace IDs
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "your-kv-namespace-id"
-preview_id = "your-kv-preview-id"
+id = "YOUR_CACHE_KV_ID"
+preview_id = "YOUR_CACHE_KV_PREVIEW_ID"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "your-rate-limit-kv-id"
-preview_id = "your-rate-limit-kv-preview-id"
+id = "YOUR_RATE_LIMIT_KV_ID"
+preview_id = "YOUR_RATE_LIMIT_KV_PREVIEW_ID"
 
 # ─── D1 Databases ─────────────────────────────────────────────────────────────
+# Create with: npx wrangler d1 create cost-detective
+# Then replace database_id with your actual database ID
 
 [[d1_databases]]
 binding = "DB"
 database_name = "cost-detective"
-database_id = "your-d1-database-id"
+database_id = "YOUR_D1_DATABASE_ID"
 
 # ─── R2 Storage ───────────────────────────────────────────────────────────────
+# Create with: npx wrangler r2 bucket create cost-detective-storage
 
 [[r2_buckets]]
 binding = "STORAGE"
@@ -42,18 +47,9 @@ bucket_name = "cost-detective-storage"
 
 # ─── Queues ───────────────────────────────────────────────────────────────────
 
-[[queues]]
-binding = "ANALYSIS_QUEUE"
-queue = "cost-detective-analysis"
-
 [[queues.producers]]
 binding = "ANALYSIS_QUEUE"
 queue = "cost-detective-analysis"
-
-[[queues.consumers]]
-queue = "cost-detective-analysis"
-max_retries = 3
-dead_letter_queue = "cost-detective-dlq"
 
 # ─── Environment Variables ────────────────────────────────────────────────────
 
@@ -61,18 +57,18 @@ dead_letter_queue = "cost-detective-dlq"
 vars = { ENVIRONMENT = "production" }
 
 [env.production.kv_namespaces]
-CACHE = { id = "prod-cache-id", preview_id = "prod-cache-preview-id" }
-RATE_LIMIT = { id = "prod-rate-limit-id", preview_id = "prod-rate-limit-preview-id" }
+CACHE = { id = "YOUR_PROD_CACHE_KV_ID", preview_id = "YOUR_PROD_CACHE_KV_PREVIEW_ID" }
+RATE_LIMIT = { id = "YOUR_PROD_RATE_LIMIT_KV_ID", preview_id = "YOUR_PROD_RATE_LIMIT_KV_PREVIEW_ID" }
 
 [env.production.d1_databases]
-DB = { database_name = "cost-detective-prod", database_id = "prod-d1-id" }
+DB = { database_name = "cost-detective-prod", database_id = "YOUR_PROD_D1_ID" }
 
 [env.staging]
 vars = { ENVIRONMENT = "staging", LOG_LEVEL = "debug" }
 
 [env.staging.kv_namespaces]
-CACHE = { id = "staging-cache-id", preview_id = "staging-cache-preview-id" }
-RATE_LIMIT = { id = "staging-rate-limit-id", preview_id = "staging-rate-limit-preview-id" }
+CACHE = { id = "YOUR_STAGING_CACHE_KV_ID", preview_id = "YOUR_STAGING_CACHE_KV_PREVIEW_ID" }
+RATE_LIMIT = { id = "YOUR_STAGING_RATE_LIMIT_KV_ID", preview_id = "YOUR_STAGING_RATE_LIMIT_KV_PREVIEW_ID" }
 
 [env.staging.d1_databases]
-DB = { database_name = "cost-detective-staging", database_id = "staging-d1-id" }
+DB = { database_name = "cost-detective-staging", database_id = "YOUR_STAGING_D1_ID" }

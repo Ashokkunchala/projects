@@ -1,0 +1,9 @@
+aws_region             = "us-east-1"
+environment            = "dev"
+project_name           = "cost-detective"
+vpc_cidr               = "10.0.0.0/16"
+public_subnet_count    = 2
+private_subnet_count   = 2
+enable_nat_gateway     = true
+enable_flow_logs       = false
+flow_log_retention_days = 30

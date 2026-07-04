@@ -52,6 +52,7 @@ infrastructure/terraform/.terraform.lock.hcl
 # ─── Cloudflare ────────────────────────────────────────────────────────────────
 infrastructure/cloudflare/node_modules/
 infrastructure/cloudflare/.wrangler/
+.wrangler/
 
 # ─── Testing ───────────────────────────────────────────────────────────────────
 .pytest_cache/
@@ -69,6 +70,7 @@ logs/
 .aws/
 credentials.json
 service-account*.json
+cloud_accounts.json
 
 # Cloudflare
 .wrangler/

@@ -216,14 +216,14 @@ export default function FreeTierUsage() {
                             <span style={{ color: statusColor }}>{getStatusIcon(usage.status)}</span>
                           </div>
                           <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
-                            {usage.type} • {usage.limit.toLocaleString()} {usage.unit} limit
+                            {usage.type} • {(usage.limit || 0).toLocaleString()} {usage.unit} limit
                           </p>
                         </div>
                       </div>
                       <div className="text-right ml-4 flex-shrink-0">
-                        <p className="text-sm font-semibold" style={{ color: barColor }}>{usage.percentage.toFixed(1)}%</p>
+                        <p className="text-sm font-semibold" style={{ color: barColor }}>{(usage.percentage || 0).toFixed(1)}%</p>
                         <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                          {usage.remaining.toLocaleString()} {usage.unit} left
+                          {(usage.remaining || 0).toLocaleString()} {usage.unit} left
                         </p>
                       </div>
                     </div>
@@ -236,15 +236,15 @@ export default function FreeTierUsage() {
                         />
                       </div>
                       <div className="flex justify-between text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span>{usage.used.toLocaleString()} {usage.unit} used</span>
-                        <span>{usage.limit.toLocaleString()} {usage.unit} limit</span>
+                        <span>{(usage.used || 0).toLocaleString()} {usage.unit} used</span>
+                        <span>{(usage.limit || 0).toLocaleString()} {usage.unit} limit</span>
                       </div>
                     </div>
 
                     {isExpanded && usage.details.length > 0 && (
                       <div className="px-4 pb-4 space-y-2" style={{ borderTop: '1px solid var(--color-section-border)', paddingTop: '12px' }}>
                         <p className="text-xs font-medium mb-2" style={{ color: 'var(--color-text-tertiary)' }}>Resources</p>
-                        {usage.details.slice(0, 5).map((detail, idx) => (
+                        {(usage.details || []).slice(0, 5).map((detail, idx) => (
                           <div key={idx} className="flex items-center justify-between p-2 rounded-lg text-xs" style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-section-border)' }}>
                             <span className="font-medium text-white truncate">{detail.name || 'Unnamed'}</span>
                             <div className="flex items-center gap-2">

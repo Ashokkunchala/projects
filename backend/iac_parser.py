@@ -865,6 +865,18 @@ def parse_zip(content: bytes) -> list[dict]:
     return all_resources
 
 
+def _sanitize_git_url(url: str) -> str:
+    """Strip embedded credentials from a git URL."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.scheme not in ("http", "https", "git", "ssh"):
+        raise ValueError(f"Unsupported git URL scheme: {parsed.scheme}")
+    sanitized = parsed._replace(netloc=parsed.hostname or parsed.netloc)
+    if parsed.port:
+        sanitized = sanitized._replace(netloc=f"{sanitized.hostname}:{parsed.port}")
+    return urlunparse(sanitized._replace(params='', query='', fragment=''))
+
+
 def parse_git_repo(repo_url: str, branch: Optional[str] = None) -> list[dict]:
     """Clone a git repo and parse all IaC templates found within.
 
@@ -874,6 +886,9 @@ def parse_git_repo(repo_url: str, branch: Optional[str] = None) -> list[dict]:
     if not _GIT_AVAILABLE:
         logger.warning("git.unavailable", extra={"detail": "gitpython not installed or git CLI missing"})
         return []
+
+    # Strip embedded credentials from URL
+    repo_url = _sanitize_git_url(repo_url)
 
     all_resources = []
     tmpdir = tempfile.mkdtemp(prefix="cost_estimate_")

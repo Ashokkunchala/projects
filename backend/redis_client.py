@@ -62,6 +62,11 @@ def _in_fallback() -> bool:
     return _fallback_mode or _redis is None
 
 
+def is_fallback() -> bool:
+    """Public check: True when Redis is unavailable and in-memory fallback is active."""
+    return _fallback_mode or _redis is None
+
+
 # ─── Rate Limiting ─────────────────────────────────────────────────────────────
 
 async def rate_limit_check(key: str, max_attempts: int = 10, window_seconds: int = 60) -> bool:

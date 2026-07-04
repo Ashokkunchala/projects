@@ -1221,7 +1221,7 @@ def _cloudflare_analyze(resources: dict, _api_key: str | None = None) -> dict:
     """Analyze resources using Cloudflare Workers AI (free, no API key needed)."""
     import httpx as _httpx
 
-    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "https://cost-detective-agent.ashokkunchla.workers.dev")
+    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "")
 
     resource_lines = []
     for service, items in resources.items():

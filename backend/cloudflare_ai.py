@@ -15,7 +15,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-WORKER_URL = os.getenv("CLOUDFLARE_WORKER_URL", "https://cost-detective-agent.ashokkunchla.workers.dev")
+WORKER_URL = os.getenv("CLOUDFLARE_WORKER_URL", "")
 _TIMEOUT = 120.0
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [0.5, 1.0, 2.0]

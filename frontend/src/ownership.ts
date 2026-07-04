@@ -1,8 +1,6 @@
-// Application branding & author credits
-export const OWNER_NAME     = "AI-CostMonitoring-Reporting"
-export const OWNER_LINKEDIN = "www.linkedin.com/in/ashok-kunchala-127820217"
-export const OWNER_EMAIL    = "ashokkunchla@gmail.com"
-export const OWNER_GITHUB   = "github.com/Ashokkunchala"
+export const OWNER_NAME     = import.meta.env.VITE_OWNER_NAME ?? "AI Cloud Cost Detective"
+export const OWNER_LINKEDIN = import.meta.env.VITE_OWNER_LINKEDIN ?? ""
+export const OWNER_EMAIL    = import.meta.env.VITE_OWNER_EMAIL ?? ""
+export const OWNER_GITHUB   = import.meta.env.VITE_OWNER_GITHUB ?? ""
 
-// No-op — kept so existing imports compile without change
 export async function validateOwnership(): Promise<void> {}

@@ -17,7 +17,7 @@ from cloudflare_ai import routed_chat
 
 logger = logging.getLogger(__name__)
 
-WORKER_URL = os.getenv("CLOUDFLARE_WORKER_URL", "https://cost-detective-agent.ashokkunchla.workers.dev")
+WORKER_URL = os.getenv("CLOUDFLARE_WORKER_URL", "")
 TIMEOUT = 60.0
 
 router = APIRouter(prefix="/api/agent")

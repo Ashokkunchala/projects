@@ -106,7 +106,11 @@ export default function Dashboard() {
   }
 
   // SSO credentials (sessionStorage — gone when tab closes)
-  const [ssoCreds, setSsoCreds] = useState<SSOCredential[]>(() => loadSSOCreds() ?? [])
+  const [ssoCreds, setSsoCreds] = useState<SSOCredential[]>([])
+
+  useEffect(() => {
+    loadSSOCreds().then(c => { if (c) setSsoCreds(c) }).catch(() => {})
+  }, [])
 
   // Org accounts
   const [orgAccounts, setOrgAccounts]         = useState<AWSAccount[]>([])
@@ -132,6 +136,9 @@ export default function Dashboard() {
   const [launching, setLaunching]   = useState(false)
   const [validating, setValidating] = useState(false)
   const [error, setError]           = useState('')
+
+  // Proactive AI suggestions
+  const [aiSuggestions, setAiSuggestions] = useState<string | null>(null)
 
   // Load regions + services when provider changes
   useEffect(() => {
@@ -177,6 +184,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (cloudProvider === 'aws' && awsAuthMode === 'organizations') loadOrgAccounts()
   }, [cloudProvider, awsAuthMode, loadOrgAccounts])
+
+  // Fetch AI suggestions from latest scan
+  useEffect(() => {
+    analysis.history(1).then(res => {
+      if (res.analyses.length > 0 && res.analyses[0].ai_summary) {
+        setAiSuggestions(res.analyses[0].ai_summary)
+      }
+    }).catch(() => {})
+  }, [])
 
   const toggleOrgAccount = (id: string) =>
     updatePrefs({
@@ -360,6 +376,29 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {/* ── AI Suggestions ─────────────────────────────────────────── */}
+      {aiSuggestions && (
+        <div className="card" style={{
+          background: 'linear-gradient(135deg, rgba(59,130,246,0.06) 0%, rgba(99,102,241,0.06) 100%)',
+          border: '1px solid rgba(59,130,246,0.15)',
+        }}>
+          <div className="flex items-start gap-3">
+            <div style={{
+              width: '28px', height: '28px', borderRadius: '7px',
+              background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <Sparkles size={14} style={{ color: 'white' }} />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-white mb-1">Latest Scan Insights</h3>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{aiSuggestions}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Cloud Provider Selector ────────────────────────────────── */}
       <div className="card">

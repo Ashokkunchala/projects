@@ -51,7 +51,11 @@ export default function EnvironmentConfig({ onSave }: Props) {
   const [authMode, setAuthMode] = useState<AwsAuthMode>(
     saved?.awsAuthMode ?? (saved?.useOrganizations ? 'organizations' : 'keys')
   )
-  const [ssoCreds, setSsoCreds] = useState<SSOCredential[]>(() => loadSSOCreds() ?? [])
+  const [ssoCreds, setSsoCreds] = useState<SSOCredential[]>([])
+
+  useEffect(() => {
+    loadSSOCreds().then(c => { if (c) setSsoCreds(c) }).catch(() => {})
+  }, [])
 
   const [useOrg, setUseOrg]               = useState(saved?.useOrganizations ?? false)
   const [accounts, setAccounts]           = useState<AWSAccount[]>([])

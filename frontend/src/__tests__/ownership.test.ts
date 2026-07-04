@@ -2,20 +2,20 @@ import { describe, it, expect } from 'vitest'
 import { OWNER_NAME, OWNER_LINKEDIN, OWNER_EMAIL, OWNER_GITHUB, validateOwnership } from '../ownership'
 
 describe('ownership', () => {
-  it('exports the owner name', () => {
-    expect(OWNER_NAME).toBe('AI-CostMonitoring-Reporting')
+  it('exports the default owner name', () => {
+    expect(OWNER_NAME).toBe('AI Cloud Cost Detective')
   })
 
-  it('exports the LinkedIn URL', () => {
-    expect(OWNER_LINKEDIN).toBe('www.linkedin.com/in/ashok-kunchala-127820217')
+  it('exports empty LinkedIn URL by default (set via VITE_OWNER_LINKEDIN)', () => {
+    expect(OWNER_LINKEDIN).toBe('')
   })
 
-  it('exports the email', () => {
-    expect(OWNER_EMAIL).toBe('ashokkunchla@gmail.com')
+  it('exports empty email by default (set via VITE_OWNER_EMAIL)', () => {
+    expect(OWNER_EMAIL).toBe('')
   })
 
-  it('exports the GitHub URL', () => {
-    expect(OWNER_GITHUB).toBe('github.com/Ashokkunchala')
+  it('exports empty GitHub URL by default (set via VITE_OWNER_GITHUB)', () => {
+    expect(OWNER_GITHUB).toBe('')
   })
 
   it('validateOwnership resolves without throwing', async () => {
