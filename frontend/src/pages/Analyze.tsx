@@ -74,7 +74,7 @@ export default function Analyze() {
     { label: 'Issues Found',      value: result.issues_found,      color: '#FF9900', border: 'border-orange-500' },
     {
       label: 'Est. Monthly Savings',
-      value: `$${result.estimated_monthly_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+      value: `$${(result.estimated_monthly_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
       color: '#28a745', border: 'border-green-500',
     },
   ] : []

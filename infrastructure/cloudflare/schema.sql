@@ -96,6 +96,34 @@ CREATE TABLE IF NOT EXISTS agent_cache (
 CREATE INDEX IF NOT EXISTS idx_agent_cache_key ON agent_cache(cache_key);
 CREATE INDEX IF NOT EXISTS idx_agent_cache_expires ON agent_cache(expires_at);
 
--- Cleanup old cache entries (run periodically)
+-- Chat conversations (NEW)
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  backend_user_id INTEGER NOT NULL DEFAULT 0,
+  title TEXT DEFAULT 'New conversation',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(backend_user_id);
+CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
+
+-- Chat messages (NEW)
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL,
+  role TEXT NOT NULL, -- 'user' | 'assistant' | 'system'
+  content TEXT NOT NULL,
+  model_used TEXT,
+  tokens_used INTEGER DEFAULT 0,
+  metadata TEXT, -- JSON: page, analysis_id, etc.
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at);
+
+-- Cleanup old cache entries (run periodically):
 -- DELETE FROM agent_cache WHERE expires_at < datetime('now');
 -- DELETE FROM analyses WHERE expires_at < datetime('now');

@@ -1,4 +1,4 @@
-import type { AnalysisDetail, AWSAccount, CloudProvider, HistoryItem } from './types'
+import type { AgentContext, AnalysisDetail, AWSAccount, CloudProvider, HistoryItem } from './types'
 
 const BASE = '/api'
 
@@ -100,22 +100,70 @@ export interface SSOCredential {
   session_token: string
 }
 
-const SSO_CREDS_KEY = 'cost_detective_sso_creds'
+// SSO credentials are stored encrypted in sessionStorage to mitigate XSS exposure.
+// The encryption key is ephemeral (per-tab-session) and never persisted to disk.
+// This is a defence-in-depth measure — credentials are still accessible to the
+// same-origin JS context but are not stored in plaintext.
 
-export function saveSSOCreds(creds: SSOCredential[]): void {
-  try { sessionStorage.setItem(SSO_CREDS_KEY, JSON.stringify(creds)) } catch { /* ignore */ }
+const SSO_CREDS_KEY = 'cost_detective_sso_creds'
+const SSO_CREDS_KEY_ENCRYPTED = 'cost_detective_sso_enc'
+
+function _ssoEncryptionKey(): Promise<CryptoKey> {
+  const raw = sessionStorage.getItem(SSO_CREDS_KEY_ENCRYPTED)
+  if (raw) {
+    return crypto.subtle.importKey('raw', Uint8Array.from(atob(raw), c => c.charCodeAt(0)), 'AES-GCM', false, ['encrypt', 'decrypt'])
+  }
+  const key = crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+  key.then(k => {
+    crypto.subtle.exportKey('raw', k).then(rawKey => {
+      sessionStorage.setItem(SSO_CREDS_KEY_ENCRYPTED, btoa(String.fromCharCode(...new Uint8Array(rawKey))))
+    })
+  })
+  return key
 }
 
-export function loadSSOCreds(): SSOCredential[] | null {
+async function _encrypt(creds: SSOCredential[]): Promise<string> {
+  const key = await _ssoEncryptionKey()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encoded = new TextEncoder().encode(JSON.stringify(creds))
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded)
+  const combined = new Uint8Array(iv.length + encrypted.byteLength)
+  combined.set(iv)
+  combined.set(new Uint8Array(encrypted), iv.length)
+  return btoa(String.fromCharCode(...combined))
+}
+
+async function _decrypt(raw: string): Promise<SSOCredential[] | null> {
+  try {
+    const key = await _ssoEncryptionKey()
+    const combined = Uint8Array.from(atob(raw), c => c.charCodeAt(0))
+    const iv = combined.slice(0, 12)
+    const data = combined.slice(12)
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+    return JSON.parse(new TextDecoder().decode(decrypted)) as SSOCredential[]
+  } catch { return null }
+}
+
+export async function saveSSOCreds(creds: SSOCredential[]): Promise<void> {
+  try {
+    const encrypted = await _encrypt(creds)
+    sessionStorage.setItem(SSO_CREDS_KEY, encrypted)
+  } catch { /* ignore */ }
+}
+
+export async function loadSSOCreds(): Promise<SSOCredential[] | null> {
   try {
     const raw = sessionStorage.getItem(SSO_CREDS_KEY)
     if (!raw) return null
-    return JSON.parse(raw) as SSOCredential[]
+    return await _decrypt(raw)
   } catch { return null }
 }
 
 export function clearSSOCreds(): void {
-  try { sessionStorage.removeItem(SSO_CREDS_KEY) } catch { /* ignore */ }
+  try {
+    sessionStorage.removeItem(SSO_CREDS_KEY)
+    sessionStorage.removeItem(SSO_CREDS_KEY_ENCRYPTED)
+  } catch { /* ignore */ }
 }
 
 type ScanPayload = {
@@ -436,6 +484,31 @@ export const cost = {
       method: 'POST',
       body: JSON.stringify(_credBody(accessKey, secretKey, sessionToken)),
     }),
+
+  explain: (serviceTotals: Record<string, number>, totalSpend: number, changes: Record<string, unknown> = {}) =>
+    req<{ explanation: string }>('/cost/explain', {
+      method: 'POST',
+      body: JSON.stringify({ service_totals: serviceTotals, total_spend: totalSpend, changes }),
+    }),
+
+  forecastNarrative: (forecasts: CostForecastEntry[], currentTotal: number) =>
+    req<{ narrative: string }>('/cost/forecast/narrative', {
+      method: 'POST',
+      body: JSON.stringify({ forecasts, current_total: currentTotal }),
+    }),
+
+  rightsizingExplain: (recommendation: RightsizingRecommendation) =>
+    req<{ explanation: string }>('/cost/rightsizing/explain', {
+      method: 'POST',
+      body: JSON.stringify({ recommendation }),
+    }),
+
+  personalizedAwareness: (activeServices: string[] = []) =>
+    req<{ tips: Array<{ category: string; title: string; summary: string; impact: string; action: string }> }>(
+      '/cost/awareness/personalized', {
+        method: 'POST',
+        body: JSON.stringify({ active_services: activeServices }),
+      }),
 }
 
 export const freeTier = {
@@ -447,6 +520,28 @@ export const freeTier = {
 
   check: (provider: string, resources: unknown[] = []) =>
     req<{ eligible: boolean; message: string }>(`/free-tier/check?provider=${provider}&resources=${encodeURIComponent(JSON.stringify(resources))}`),
+
+  recommendations: (usageData: Record<string, unknown>, provider = 'aws') =>
+    req<{ recommendations: Array<{ title: string; description: string; action: string; impact: string }> }>(
+      '/free-tier/recommendations', {
+        method: 'POST',
+        body: JSON.stringify({ usage_data: usageData, provider }),
+      }),
+
+  checkAI: (resourceTypes: string[], provider = 'aws') =>
+    req<{ eligible: boolean; services_checked: number; details: Array<{ resource_type: string; eligible: boolean; limit: string; condition: string; explanation: string }> }>(
+      '/free-tier/check/ai', {
+        method: 'POST',
+        body: JSON.stringify({ resource_types: resourceTypes, provider }),
+      }),
+}
+
+export const estimateAI = {
+  insights: (resourcesFound: number, totalCost: number, serviceBreakdown: Record<string, number>) =>
+    req<{ insights: string }>('/estimate/insights', {
+      method: 'POST',
+      body: JSON.stringify({ resources_found: resourcesFound, total_cost: totalCost, service_breakdown: serviceBreakdown }),
+    }),
 }
 
 export const freeTierUsage = {
@@ -475,4 +570,92 @@ export const infraViz = {
 
   scanGit: (repoUrl: string) =>
     req<unknown>(`/infra/scan-git?repo_url=${encodeURIComponent(repoUrl)}`),
+
+  summarize: (nodes: unknown[], edges: unknown[]) =>
+    req<{ summary: string }>('/infra/summarize', {
+      method: 'POST',
+      body: JSON.stringify({ nodes, edges }),
+    }),
+
+  preApply: (content: string, fileType: string = 'terraform') =>
+    req<{ nodes: unknown[]; edges: unknown[]; suggestions: unknown[]; summary: Record<string, unknown>; architecture_summary: string; resource_count_by_type: Record<string, number> }>(
+      '/infra/pre-apply', {
+        method: 'POST',
+        body: JSON.stringify({ content, file_type: fileType }),
+      }),
+
+  validateAI: (rawResources: Record<string, unknown>) =>
+    req<{ issues: Array<{ severity: string; category: string; resource_id: string; message: string; explanation: string; fix: string }> }>(
+      '/infra/validate/ai', {
+        method: 'POST',
+        body: JSON.stringify({ raw_resources: rawResources }),
+      }),
+  fromScan: () =>
+    req<{ nodes: unknown[]; edges: unknown[]; broken_connections: unknown[]; suggestions: unknown[]; summary: Record<string, unknown> }>(
+      '/infra/from-scan', { method: 'POST' }),
+}
+
+export interface AgentAnalysisRequest {
+  action: 'analyze' | 'validate' | 'explain'
+  content: string
+  file_type: 'terraform' | 'cloudformation' | 'kubernetes' | 'docker-compose'
+  options?: {
+    focus?: 'cost' | 'security' | 'performance' | 'all'
+    provider?: 'aws' | 'azure' | 'gcp'
+  }
+}
+
+export const agent = {
+  analyze: (payload: AgentAnalysisRequest) =>
+    req<unknown>('/agent/analyze', { method: 'POST', body: JSON.stringify(payload) }),
+  validate: (payload: AgentAnalysisRequest) =>
+    req<unknown>('/agent/validate', { method: 'POST', body: JSON.stringify(payload) }),
+  explain: (payload: AgentAnalysisRequest) =>
+    req<unknown>('/agent/explain', { method: 'POST', body: JSON.stringify(payload) }),
+  complete: (payload: { prompt: string; system?: string; max_tokens?: number; temperature?: number }) =>
+    req<{ success: boolean; response: string }>('/agent/complete', { method: 'POST', body: JSON.stringify(payload) }),
+  health: () =>
+    req<{ status: string; environment: string; model: string; services: { ai: boolean; database: boolean; cache: boolean } }>('/agent/health'),
+
+  // Chat
+  chat: (payload: {
+    messages: Array<{ role: string; content: string }>
+    context?: AgentContext
+    conversation_id?: number
+    max_tokens?: number
+    temperature?: number
+  }) => req<{ response: string; conversation_id?: number }>('/agent/chat', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Conversations
+  conversations: {
+    list: () => req<{ conversations: Array<{ id: number; title: string; created_at: string; updated_at: string }> }>('/agent/conversations'),
+    create: (title?: string) => req<{ id: number; title: string }>('/agent/conversations', { method: 'POST', body: JSON.stringify({ title }) }),
+    messages: (id: number) => req<{ messages: Array<{ id: number; role: string; content: string; model_used?: string; created_at: string }> }>(`/agent/conversations/${id}`),
+    delete: (id: number) => req<{ success: boolean }>(`/agent/conversations/${id}`, { method: 'DELETE' }),
+  },
+
+  // Advanced capabilities
+  generateFix: (issue: Record<string, unknown>, context?: Record<string, unknown>) =>
+    req<{ command: string; explanation: string; prerequisites: string[]; rollback: string; impact: string }>(
+      '/agent/fix', { method: 'POST', body: JSON.stringify({ issue, context }) }),
+
+  simulateCost: (resource: Record<string, unknown>, proposedChange: string) =>
+    req<{ current_monthly_cost: number; new_monthly_cost: number; monthly_savings: number; annual_savings: number; risks: string[]; recommendation: string; explanation: string }>(
+      '/agent/simulate', { method: 'POST', body: JSON.stringify({ resource, proposed_change: proposedChange }) }),
+
+  complianceCheck: (resources: Record<string, unknown>, framework = 'cis') =>
+    req<{ framework: string; score: number; passed_checks: number; total_checks: number; violations: Array<{ control: string; severity: string; resource: string; description: string; fix: string }>; recommendations: string[] }>(
+      '/agent/compliance', { method: 'POST', body: JSON.stringify({ resources, framework }) }),
+
+  detectAnomalies: (currentScan: Record<string, unknown>, historicalScans: Record<string, unknown>[]) =>
+    req<{ anomalies: Array<{ type: string; severity: string; message: string; details: string; recommendation: string }> }>(
+      '/agent/anomalies', { method: 'POST', body: JSON.stringify({ current_scan: currentScan, historical_scans: historicalScans }) }),
+
+  generateIaC: (description: string, format = 'terraform', provider = 'aws') =>
+    req<{ code: string; format: string; explanation: string; estimated_monthly_cost: number; warnings: string[] }>(
+      '/agent/generate-iac', { method: 'POST', body: JSON.stringify({ description, format, provider }) }),
+
+  resourceLookup: (query: string) =>
+    req<{ response: string }>(
+      '/agent/resource-lookup', { method: 'POST', body: JSON.stringify({ query }) }),
 }

@@ -8,12 +8,13 @@ import CostReports from './pages/CostReports'
 import Dashboard from './pages/Dashboard'
 import Estimate from './pages/Estimate'
 import FreeTier from './pages/FreeTier'
-import FreeTierUsage from './pages/FreeTierUsage'
 import History from './pages/History'
 import InfraVisualizer from './pages/InfraVisualizer'
 import Login from './pages/Login'
 import Report from './pages/Report'
 import Signup from './pages/Signup'
+import AIAgent from './pages/AIAgent'
+import ChatWidget from './components/ChatWidget'
 import type { ReactNode } from 'react'
 
 function LoadingScreen() {
@@ -47,8 +48,8 @@ export default function App() {
             <Route path="/estimate" element={<Private><Estimate /></Private>} />
             <Route path="/cost-reports" element={<Private><CostReports /></Private>} />
             <Route path="/free-tier" element={<Private><FreeTier /></Private>} />
-            <Route path="/free-tier/usage" element={<Private><FreeTierUsage /></Private>} />
             <Route path="/infra-visualizer" element={<Private><InfraVisualizer /></Private>} />
+            <Route path="/ai-agent" element={<Navigate to="/infra-visualizer" replace />} />
             <Route path="/analyze/:id" element={<Private><Analyze /></Private>} />
             <Route path="/report/:id" element={<Private><Report /></Private>} />
             <Route path="/history" element={<Private><History /></Private>} />
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
+        {user && <ChatWidget />}
       </div>
     </ThemeProvider>
   )

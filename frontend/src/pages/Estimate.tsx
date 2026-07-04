@@ -69,7 +69,7 @@ function SuggestionCard({ suggestion }: { suggestion: CostEstimateSuggestion }) 
             <span className="font-semibold text-sm">{suggestion.title}</span>
             {suggestion.potential_savings > 0 && (
               <span className="badge-high" style={{ fontSize: '0.65rem' }}>
-                -${suggestion.potential_savings.toFixed(2)}/mo
+                -${(suggestion.potential_savings || 0).toFixed(2)}/mo
               </span>
             )}
           </div>
@@ -120,7 +120,7 @@ function ResourceRow({ resource }: { resource: ResourceEstimate }) {
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <p className="font-bold" style={{ color: 'var(--color-accent)' }}>
-            ${resource.monthly_cost.toFixed(2)}
+            ${(resource.monthly_cost || 0).toFixed(2)}
           </p>
           <p style={{ color: 'var(--color-text-tertiary)', fontSize: '0.68rem' }}>/mo</p>
         </div>
@@ -444,10 +444,10 @@ export default function Estimate() {
 
           {/* Cost cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <CostCard label="Monthly Cost" value={`$${report.total_monthly_cost.toFixed(2)}`} color="var(--color-accent)" />
-            <CostCard label="Yearly Cost" value={`$${report.total_yearly_cost.toFixed(2)}`} color="var(--color-accent)" />
+            <CostCard label="Monthly Cost" value={`$${(report.total_monthly_cost || 0).toFixed(2)}`} color="var(--color-accent)" />
+            <CostCard label="Yearly Cost" value={`$${(report.total_yearly_cost || 0).toFixed(2)}`} color="var(--color-accent)" />
             <CostCard label="Resources" value={String(report.resource_count)} color="var(--color-text)" />
-            <CostCard label="Potential Savings" value={`-$${report.total_potential_savings.toFixed(2)}`} color="#10b981" />
+            <CostCard label="Potential Savings" value={`-$${(report.total_potential_savings || 0).toFixed(2)}`} color="#10b981" />
           </div>
 
           {/* Provider breakdown */}
@@ -481,7 +481,7 @@ export default function Estimate() {
                           {item.percentage}%
                         </span>
                         <span className="font-semibold" style={{ width: 80, textAlign: 'right' }}>
-                          ${item.monthly_cost.toFixed(2)}
+                          ${(item.monthly_cost || 0).toFixed(2)}
                         </span>
                       </div>
                     </div>
@@ -506,11 +506,11 @@ export default function Estimate() {
           )}
 
           {/* Resource estimates */}
-          {report.resource_estimates.length > 0 && (
+          {(report.resource_estimates || []).length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold" style={{ color: 'var(--color-text-secondary)' }}>
-                  Resource Breakdown ({report.resource_estimates.length})
+                  Resource Breakdown ({(report.resource_estimates || []).length})
                 </h3>
               </div>
               <div className="space-y-2">
@@ -522,11 +522,11 @@ export default function Estimate() {
           )}
 
           {/* Unknown resources */}
-          {report.unknown_resources.length > 0 && (
+          {(report.unknown_resources || []).length > 0 && (
             <div className="card p-4" style={{ border: '1px solid rgba(245,158,11,0.3)' }}>
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle size={14} color="#f59e0b" />
-                <span className="font-semibold text-sm">Unknown Resources ({report.unknown_resources.length})</span>
+                <span className="font-semibold text-sm">Unknown Resources ({(report.unknown_resources || []).length})</span>
               </div>
               <p style={{ color: 'var(--color-text-tertiary)', fontSize: '0.78rem' }}>
                 These resource types could not be estimated. Check the resource type or add pricing data.
@@ -553,7 +553,7 @@ export default function Estimate() {
                     Cost-Saving Suggestions ({sortedSuggestions.length})
                   </h3>
                   <span className="badge-high" style={{ fontSize: '0.65rem' }}>
-                    Save ${report.total_potential_savings.toFixed(2)}/mo
+                    Save ${(report.total_potential_savings || 0).toFixed(2)}/mo
                   </span>
                 </div>
                 <div className="flex gap-1">
@@ -623,7 +623,7 @@ export default function Estimate() {
                   <p style={{ color: 'var(--color-text-tertiary)', fontSize: '0.65rem', fontWeight: 600 }}>Monthly Free Savings</p>
                   <p style={{ color: '#f59e0b', fontSize: '1.1rem', fontWeight: 700, marginTop: 2 }}>
                     ${report.free_tier_eligible
-                      ? report.free_tier_eligible.reduce((s, r) => s + r.monthly_cost, 0).toFixed(0)
+                      ? report.free_tier_eligible.reduce((s, r) => s + (r.monthly_cost || 0), 0).toFixed(0)
                       : '0'}
                   </p>
                 </div>

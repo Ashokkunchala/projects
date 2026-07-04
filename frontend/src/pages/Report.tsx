@@ -97,7 +97,7 @@ function IssueCard({ issue }: { issue: Issue }) {
           borderRadius: '10px', padding: '8px 14px',
         }}>
           <p className="text-green-400 font-bold" style={{ fontSize: '1.2rem', lineHeight: 1 }}>
-            ${issue.potential_monthly_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+            ${(issue.potential_monthly_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
           </p>
           <p style={{ color: 'var(--color-text-tertiary)', fontSize: '0.66rem', marginTop: '3px' }}>/month</p>
         </div>
@@ -154,6 +154,7 @@ export default function Report() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [result, setResult]     = useState<AnalysisResult | null>(null)
+  const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
   const [filterSeverity, setFilterSeverity] = useState<string>('all')
@@ -165,7 +166,11 @@ export default function Report() {
   useEffect(() => {
     if (!id) return
     analysis.get(id)
-      .then((data) => { if (data.analysis_result) setResult(data.analysis_result); else setError('Analysis result not available yet.') })
+      .then((data) => {
+        if (data.analysis_result) setResult(data.analysis_result)
+        else setError('Analysis result not available yet.')
+        if (data.ai_summary) setAiSummary(data.ai_summary)
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [id])
@@ -189,11 +194,12 @@ export default function Report() {
 
   if (!result) return null
 
-  const services = [...new Set(result.issues.map((i) => i.service))].sort()
-  const types    = [...new Set(result.issues.map((i) => i.issue_type))].sort()
-  const accounts = [...new Set(result.issues.map((i) => i.account_id).filter(Boolean))].sort() as string[]
+  const issues = result.issues || []
+  const services = [...new Set(issues.map((i) => i.service))].sort()
+  const types    = [...new Set(issues.map((i) => i.issue_type))].sort()
+  const accounts = [...new Set(issues.map((i) => i.account_id).filter(Boolean))].sort() as string[]
 
-  const filtered = result.issues
+  const filtered = issues
     .filter((i) => filterSeverity === 'all' || i.severity   === filterSeverity)
     .filter((i) => filterService  === 'all' || i.service    === filterService)
     .filter((i) => filterType     === 'all' || i.issue_type === filterType)
@@ -201,7 +207,7 @@ export default function Report() {
     .sort((a, b) =>
       sortBy === 'severity'
         ? (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3)
-        : b.potential_monthly_savings - a.potential_monthly_savings,
+        : (b.potential_monthly_savings || 0) - (a.potential_monthly_savings || 0),
     )
 
   const summaryCards = [
@@ -209,12 +215,12 @@ export default function Report() {
     { label: 'Issues Found',         value: result.issues_found,      color: '#f59e0b', border: 'border-amber-500' },
     {
       label: 'Monthly Savings',
-      value: `$${result.estimated_monthly_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+      value: `$${(result.estimated_monthly_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
       color: '#16a34a', border: 'border-green-500',
     },
     {
       label: 'Annual Savings',
-      value: `$${result.estimated_annual_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+      value: `$${(result.estimated_annual_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
       color: '#22c55e', border: 'border-green-400',
     },
   ]
@@ -223,9 +229,9 @@ export default function Report() {
     const header = 'Service,Resource,Region,Account,Severity,Type,Explanation,Fix Command,Monthly Savings\n'
     const rows = filtered.map((i) =>
       [i.service, i.resource_name, i.region, i.account_name ?? '', i.severity, i.issue_type,
-       `"${i.explanation.replace(/"/g, '""')}"`,
-       `"${i.fix_command.replace(/"/g, '""')}"`,
-       i.potential_monthly_savings].join(',')
+       `"${(i.explanation || '').replace(/"/g, '""')}"`,
+       `"${(i.fix_command || '').replace(/"/g, '""')}"`,
+       i.potential_monthly_savings || 0].join(',')
     ).join('\n')
     const blob = new Blob([header + rows], { type: 'text/csv' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
@@ -240,6 +246,29 @@ export default function Report() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+
+      {/* AI Summary */}
+      {aiSummary && (
+        <div className="card" style={{
+          background: 'linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(99,102,241,0.08) 100%)',
+          border: '1px solid rgba(59,130,246,0.2)',
+        }}>
+          <div className="flex items-start gap-3">
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '8px',
+              background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <span className="text-white text-sm">&#9889;</span>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-1">AI Executive Summary</h3>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{aiSummary}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top bar */}
       <div className="flex items-center justify-between">
@@ -295,8 +324,8 @@ export default function Report() {
                 <p className="text-sm font-semibold text-white mb-1">What this means for your bill</p>
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
                   The tool found <strong className="text-white">{result.issues_found} issue{result.issues_found !== 1 ? 's' : ''}</strong> that could save you{' '}
-                  <strong className="text-green-400">${result.estimated_monthly_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}/month</strong>{' '}
-                  (${result.estimated_annual_savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}/year).
+                  <strong className="text-green-400">${(result.estimated_monthly_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}/month</strong>{' '}
+                  (${(result.estimated_annual_savings || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}/year).
                   Each issue below shows a fix command you can run to apply the change. 
                   Start with <strong className="text-white">HIGH</strong> severity items — they're the biggest savings with the least effort.
                 </p>
@@ -361,7 +390,7 @@ export default function Report() {
       </div>
 
       {/* Filters */}
-      {result.issues.length > 0 && (
+      {issues.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <Filter size={14} style={{ color: 'var(--color-text-tertiary)' }} className="shrink-0" />
           {[
@@ -399,7 +428,7 @@ export default function Report() {
       {/* Issue cards */}
       {filtered.length === 0 ? (
         <div className="card text-center py-10" style={{ color: 'var(--color-text-tertiary)' }}>
-          {result.issues.length === 0
+          {issues.length === 0
             ? '✓ No cost issues detected — your cloud environment looks optimised!'
             : 'No issues match the current filters.'}
         </div>

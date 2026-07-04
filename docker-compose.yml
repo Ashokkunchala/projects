@@ -17,6 +17,7 @@ services:
       AWS_ACCOUNTS_FILE: cloud_accounts.json
       # Restrict CORS to known origins. Use ALLOWED_ORIGINS=* only for local dev — never production.
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
+      CLOUDFLARE_WORKER_URL: "${CLOUDFLARE_WORKER_URL:-https://cost-detective-agent.ashokkunchla.workers.dev}"
     volumes:
       - ./cloud_accounts.json:/app/cloud_accounts.json
       - backend_data:/app/data

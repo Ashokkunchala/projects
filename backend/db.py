@@ -98,6 +98,9 @@ async def create_tables():
         await conn.execute("""
             ALTER TABLE analyses ADD COLUMN IF NOT EXISTS cloud_provider TEXT DEFAULT 'aws'
         """)
+        await conn.execute("""
+            ALTER TABLE analyses ADD COLUMN IF NOT EXISTS ai_summary TEXT
+        """)
         # Index for fast per-user history queries
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS analyses_user_id_idx ON analyses(user_id)
@@ -253,7 +256,7 @@ async def create_analysis(
     }
 
 
-async def update_analysis(analysis_id: str, result: dict) -> None:
+async def update_analysis(analysis_id: str, result: dict, ai_summary: str = None) -> None:
     savings = f"${result.get('estimated_monthly_savings', 0):.2f}/month"
     if pool:
         async with pool.acquire() as conn:
@@ -263,12 +266,14 @@ async def update_analysis(analysis_id: str, result: dict) -> None:
                    issues_found = $2,
                    estimated_savings = $3,
                    analysis_result = $4::jsonb,
+                   ai_summary = $5,
                    status = 'complete'
-                   WHERE id = $5""",
+                   WHERE id = $6""",
                 result.get("total_resources", 0),
                 result.get("issues_found", 0),
                 savings,
                 json.dumps(result),
+                ai_summary,
                 analysis_id,
             )
         return
@@ -278,6 +283,7 @@ async def update_analysis(analysis_id: str, result: dict) -> None:
             "issues_found": result.get("issues_found", 0),
             "estimated_savings": savings,
             "analysis_result": result,
+            "ai_summary": ai_summary,
             "status": "complete",
         })
 

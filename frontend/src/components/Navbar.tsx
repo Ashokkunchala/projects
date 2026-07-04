@@ -1,8 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../AuthContext'
 import { useTheme } from '../ThemeContext'
-import { BarChart3, History, KeyRound, LogOut, Sun, Moon, Calculator, TrendingDown, Cloud, Activity, GitBranch } from 'lucide-react'
-import LinkedInBadge from './LinkedInBadge'
+import { BarChart3, History, KeyRound, LogOut, Sun, Moon, Calculator, TrendingDown, Cloud, GitBranch } from 'lucide-react'
 
 export default function Navbar() {
   const { user, logout } = useAuth()
@@ -11,114 +10,75 @@ export default function Navbar() {
   const location  = useLocation()
 
   const handleLogout = () => { logout(); navigate('/login') }
-
   const isActive = (path: string) => location.pathname === path
+
+  const navItems = [
+    { to: '/',              Icon: BarChart3,    label: 'Dashboard' },
+    { to: '/estimate',      Icon: Calculator,   label: 'Estimator' },
+    { to: '/cost-reports',  Icon: TrendingDown,  label: 'Reports' },
+    { to: '/free-tier',     Icon: Cloud,         label: 'Free Tier' },
+    { to: '/infra-visualizer', Icon: GitBranch,  label: 'Infra & AI' },
+    { to: '/history',       Icon: History,       label: 'History' },
+  ]
 
   return (
     <nav className="app-banner sticky top-0 z-50" style={{ boxShadow: '0 4px 24px rgba(0,0,0,0.55)' }}>
-      {/* Ambient orbs */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, overflow: 'hidden', pointerEvents: 'none' }}>
-        <div style={{
-          position: 'absolute', width: '300px', height: '300px', borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(42,82,152,0.22) 0%, transparent 70%)',
-          top: '-140px', left: '-50px',
-        }} />
-        <div style={{
-          position: 'absolute', width: '220px', height: '220px', borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(201,146,42,0.1) 0%, transparent 70%)',
-          top: '-90px', right: '-30px',
-        }} />
+        <div style={{ position: 'absolute', width: '300px', height: '300px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(42,82,152,0.22) 0%, transparent 70%)', top: '-140px', left: '-50px' }} />
+        <div style={{ position: 'absolute', width: '220px', height: '220px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(201,146,42,0.1) 0%, transparent 70%)', top: '-90px', right: '-30px' }} />
       </div>
 
-      {/* Main row */}
-      <div className="max-w-7xl mx-auto px-4 h-[64px] flex items-center gap-4"
+      <div className="max-w-7xl mx-auto px-3 h-[56px] flex items-center gap-2"
         style={{ position: 'relative', zIndex: 2 }}>
 
         {/* Logo */}
-        <Link to="/" className="flex items-center gap-3 shrink-0 no-underline">
-          <div className="app-logo-badge">AI</div>
-          <div style={{
-            width: '1px', alignSelf: 'stretch', margin: '14px 0', flexShrink: 0,
-            background: 'linear-gradient(180deg, transparent, rgba(240,200,74,0.45), transparent)',
-          }} />
-          <div>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.88em', letterSpacing: '0.3px', lineHeight: 1.3 }}>
-              Cloud Cost Detective
-            </div>
-            <div className="hidden sm:flex items-center gap-1.5 mt-0.5">
-              {[
-                { label: 'AWS',   bg: '#FF9900' },
-                { label: 'Azure', bg: '#0078D4' },
-                { label: 'GCP',   bg: '#4285F4' },
-              ].map(({ label, bg }) => (
-                <span key={label} style={{
-                  background: bg, borderRadius: '4px',
-                  padding: '1px 5px', fontSize: '0.58rem', fontWeight: 800,
-                  color: '#fff', letterSpacing: '0.8px',
-                }}>{label}</span>
-              ))}
-              <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.58rem', letterSpacing: '0.4px' }}>
-                Multi-Cloud Intelligence
-              </span>
-            </div>
-          </div>
+        <Link to="/" className="flex items-center gap-2 shrink-0 no-underline">
+          <div className="app-logo-badge" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>AI</div>
+          <span className="text-white font-bold text-sm hidden md:block" style={{ letterSpacing: '0.3px' }}>Cost Detective</span>
         </Link>
 
-        {/* Nav links — center */}
-        <div className="flex items-center gap-1 mx-auto">
-          {[
-            { to: '/',            Icon: BarChart3,    label: 'Dashboard' },
-            { to: '/estimate',    Icon: Calculator,   label: 'Estimator' },
-            { to: '/cost-reports', Icon: TrendingDown, label: 'Cost Reports' },
-            { to: '/free-tier',   Icon: Cloud,        label: 'Free Tier' },
-            { to: '/free-tier/usage', Icon: Activity, label: 'Usage' },
-            { to: '/infra-visualizer', Icon: GitBranch, label: 'Infra Viz' },
-            { to: '/history',     Icon: History,      label: 'History'   },
-          ].map(({ to, Icon, label }) => (
+        {/* Nav links */}
+        <div className="flex items-center gap-0.5 ml-2 overflow-x-auto">
+          {navItems.map(({ to, Icon, label }) => (
             <Link key={to} to={to}
-              className={`nav-link flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-all${isActive(to) ? ' nav-link--active' : ''}`}
-            >
-              <Icon size={14} />
-              <span className="hidden sm:inline">{label}</span>
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap"
+              style={{
+                background: isActive(to) ? 'rgba(255,255,255,0.12)' : 'transparent',
+                color: isActive(to) ? '#fff' : 'rgba(255,255,255,0.6)',
+              }}>
+              <Icon size={13} />
+              <span>{label}</span>
             </Link>
           ))}
         </div>
 
         {/* Right controls */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 ml-auto shrink-0">
           {user?.email && (
-            <span className="hidden md:block truncate max-w-[180px]"
-              style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.78em' }}>
+            <span className="hidden lg:block truncate max-w-[140px] text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
               {user.email}
             </span>
           )}
 
-          <LinkedInBadge className="hidden lg:inline-flex" />
-
-          {/* Theme toggle */}
-          <button onClick={toggleTheme} className="btn-theme-toggle"
+          <button onClick={toggleTheme} className="p-1.5 rounded-lg transition-colors hover:bg-white/10"
+            style={{ color: 'rgba(255,255,255,0.6)' }}
             title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
-            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
           </button>
 
-          <Link to="/change-password"
-            className="btn-ghost flex items-center gap-1.5 text-sm"
-            style={{
-              color: isActive('/change-password') ? '#fff' : undefined,
-              background: isActive('/change-password') ? 'rgba(255,255,255,0.13)' : undefined,
-            }}>
+          <Link to="/change-password" className="p-1.5 rounded-lg transition-colors hover:bg-white/10"
+            style={{ color: isActive('/change-password') ? '#fff' : 'rgba(255,255,255,0.6)' }}>
             <KeyRound size={14} />
-            <span className="hidden sm:block">Password</span>
           </Link>
 
-          <button onClick={handleLogout} className="btn-ghost flex items-center gap-1.5 text-sm">
-            <LogOut size={14} />
+          <button onClick={handleLogout} className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors hover:bg-white/10"
+            style={{ color: 'rgba(255,255,255,0.6)' }}>
+            <LogOut size={13} />
             <span className="hidden sm:block">Logout</span>
           </button>
         </div>
       </div>
 
-      {/* Gold accent stripe */}
       <div className="banner-stripe" />
     </nav>
   )

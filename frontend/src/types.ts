@@ -40,6 +40,7 @@ export interface HistoryItem {
   estimated_savings: string | null
   status: 'running' | 'complete' | 'failed'
   error_message?: string | null
+  ai_summary?: string | null
   created_at: string
 }
 
@@ -58,4 +59,36 @@ export interface AWSAccount {
 
 export interface AnalysisDetail extends HistoryItem {
   analysis_result: AnalysisResult | null
+  ai_summary?: string | null
+}
+
+// ─── Chat / Agent Types ─────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export interface AgentContext {
+  analysis_id?: string
+  analysis_result?: Record<string, unknown>
+  scan_data?: Record<string, unknown>
+  page?: string
+  user_services?: string[]
+}
+
+export interface Conversation {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationMessage {
+  id: number
+  role: string
+  content: string
+  model_used?: string
+  metadata?: string
+  created_at: string
 }

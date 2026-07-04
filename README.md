@@ -1,6 +1,6 @@
 # AI Cloud Cost Detective
 
-**Intelligent Multi-Cloud Cost Optimization Platform**
+**Intelligent Multi-Cloud Cost Optimization Platform with AI Agent**
 
 > Scan your AWS, Azure, or GCP infrastructure, detect waste, and get AI-powered recommendations to reduce your cloud bill by up to 60%.
 
@@ -12,17 +12,12 @@
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
-- [Installation](#installation)
+- [Pages & Features](#pages--features)
+- [AI Agent Integration](#ai-agent-integration)
+- [Infrastructure & AI Visualizer](#infrastructure--ai-visualizer)
 - [Configuration](#configuration)
-- [Usage Guide](#usage-guide)
-- [AI Engine](#ai-engine)
-- [Infrastructure Visualizer](#infrastructure-visualizer)
-- [Free Tier Tracking](#free-tier-tracking)
-- [API Reference](#api-reference)
 - [Deployment](#deployment)
 - [Security](#security)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
 - [License](#license)
 - [Author](#author)
 
@@ -57,21 +52,23 @@ AI Cloud Cost Detective is a production-grade, open-source platform that helps o
 | Feature | Description |
 |---------|-------------|
 | **Multi-Cloud Support** | Scan AWS, Azure, and GCP from a single interface |
-| **AI-Powered Analysis** | Use Claude, GPT-4o, Gemini, or 11+ other AI providers |
+| **AI-Powered Analysis** | Cloudflare Workers AI (Llama 3.1 8B) + 14 paid providers |
 | **Real-time Progress** | WebSocket-based live updates during scans |
-| **Cost Estimation** | Accurate monthly cost calculations with breakdown |
+| **Cost Estimation** | Parse Terraform/CloudFormation, estimate monthly costs |
 | **Fix Commands** | Ready-to-run CLI commands for each recommendation |
-| **Historical Tracking** | Monitor savings over time with trend analysis |
-| **Infrastructure Visualization** | Interactive architecture diagrams with connection validation |
+| **Infrastructure Visualization** | Interactive architecture diagrams with flow arrows |
+| **Pre-Apply Analysis** | See resource hierarchy and connections before applying IaC |
 | **Free Tier Monitoring** | Track usage against free tier limits in real-time |
+| **AI Chat Assistant** | Ask questions about your infrastructure via floating chat widget |
 
 ### Security Features
 
 | Feature | Implementation |
 |---------|----------------|
 | Authentication | JWT with httpOnly cookies, bcrypt password hashing |
+| Social Login | GitHub, LinkedIn, Google OAuth support |
 | Rate Limiting | Per-IP and per-user limits on all endpoints |
-| Credential Handling | Cloud credentials never stored - memory only during scans |
+| Credential Handling | Cloud credentials never stored — memory only during scans |
 | SSRF Prevention | URL allowlisting for SSO endpoints |
 | Data Encryption | TLS everywhere, encrypted at rest |
 
@@ -82,58 +79,35 @@ AI Cloud Cost Detective is a production-grade, open-source platform that helps o
 ### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              USER INTERFACE                                  │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    React Frontend (Vite + Tailwind)                 │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │   │
-│  │  │Dashboard │ │ Scanner  │ │ Reports  │ │ Infra Viz│ │ Free Tier│ │   │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            FASTAPI BACKEND                                  │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        API Layer (REST + WebSocket)                 │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │   │
-│  │  │  Auth    │ │ Scanning │ │Analysis  │ │  Infra   │ │ Free Tier│ │   │
-│  │  │ Service  │ │ Service  │ │ Service  │ │  Viz     │ │ Tracker  │ │   │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                      │                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        Scanner Layer                                 │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │   │
-│  │  │AWS Scan  │ │Azure Scan│ │GCP Scan  │ │AI Engine │ │Rule Engine│  │   │
-│  │  │(boto3)   │ │(azure-mg)│ │(google)  │ │(14 prov) │ │(built-in) │  │   │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-              ┌───────────────────────┼───────────────────────┐
-              ▼                       ▼                       ▼
-┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│     PostgreSQL      │ │       Redis         │ │   Cloudflare AI     │
-│   (Data Storage)    │ │    (Caching)        │ │   (Enhanced Analysis)│
-└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          USER INTERFACE                              │
+│  React + TypeScript + Vite + Tailwind CSS                           │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
+│  │Dashboard │ │Estimator │ │Reports   │ │Infra & AI│ │Free Tier │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        FASTAPI BACKEND                               │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Auth │ Scanning │ Analysis │ IaC Parsing │ Cost Estimation │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                              │                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Cloudflare AI Worker  ◄──►  PostgreSQL  ◄──►  Redis         │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+### Cloudflare AI Agent
 
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│  User    │───▶│ Validate │───▶│  Scan    │───▶│ Analyze  │───▶│ Report   │
-│  Request │    │ Creds    │    │ Resources│    │ Findings │    │ Results  │
-└──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
-                    │               │               │               │
-                    ▼               ▼               ▼               ▼
-              ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-              │ Rate     │    │ WebSocket│    │ AI/Rules │    │ Save to  │
-              │ Limiter  │    │ Progress │    │ Engine   │    │ Database │
-              └──────────┘    └──────────┘    └──────────┘    └──────────┘
-```
+The platform uses Cloudflare Workers AI as its primary intelligence layer:
+
+- **Model**: Llama 3.1 8B (FP8) for chat, Llama 3.2 3B for fast analysis
+- **Free Tier**: 10K neurons/day on Cloudflare's free plan
+- **Endpoints**: `/api/agent/analyze`, `/api/agent/validate`, `/api/agent/explain`, `/api/agent/chat`
+- **Features**: SSE streaming, conversation history, context injection
 
 ---
 
@@ -145,7 +119,6 @@ AI Cloud Cost Detective is a production-grade, open-source platform that helps o
 |------|---------|---------|
 | Docker | 24+ | Container runtime |
 | Docker Compose | 2.24+ | Multi-container orchestration |
-| Git | any | Version control |
 
 ### 3-Step Setup
 
@@ -171,62 +144,123 @@ API Docs:  http://localhost:8000/docs (when DEBUG=true)
 
 ---
 
-## Installation
+## Pages & Features
 
-### Option 1: Docker (Recommended)
+### Dashboard (`/`)
+- Enter cloud credentials (AWS/Azure/GCP)
+- Select regions and services to scan
+- Launch cost analysis with real-time progress
+- View AI-generated insights from latest scan
 
-```bash
-# Clone and setup
-git clone https://github.com/Ashokkunchala/projects.git
-cd projects
+### Cost Estimator (`/estimate`)
+- Paste Terraform/CloudFormation code
+- Clone Git repos for analysis
+- Upload IaC files from local machine
+- Get monthly cost breakdown with suggestions
 
-# Generate secure password
-python3 -c "import secrets; print('POSTGRES_PASSWORD=' + secrets.token_hex(24))" > .env
+### Cost Reports (`/cost-reports`)
+- AWS Cost Explorer integration
+- Cost forecasting and trend analysis
+- EC2 rightsizing recommendations
+- Personalized cost-saving tips
 
-# Build and start
-docker compose up --build -d
+### Free Tier (`/free-tier`)
+- Unified page with two tabs:
+  - **My Usage** — Health score, service usage bars, resource details
+  - **All Services** — Searchable reference for AWS/Azure/GCP free tier
+- Provider selector (AWS/Azure/GCP)
 
-# View logs
-docker compose logs -f
+### Infrastructure & AI Agent (`/infra-visualizer`)
+- **Unified page** combining infrastructure visualization and AI analysis
+- Input modes: Paste Code, Clone Repo, Upload Files
+- Actions: Analyze, Validate, Explain, Pre-Apply
+- **Pre-Apply Analysis**: See resource hierarchy, connections, and cost before applying
+- **Hierarchical Architecture Diagram**: Visual tree + ASCII export
+- Interactive canvas with flow arrows, zoom, pan, drag
+
+### History (`/history`)
+- View all past scans
+- Compare results across scans
+- Delete old analyses
+
+---
+
+## AI Agent Integration
+
+### How It Works
+
+The AI Agent is the central intelligence layer powering the entire platform:
+
+```
+User Input → Backend Proxy → Cloudflare Worker → Llama 3.1 8B → Response
+     │                                                    │
+     │              Model Router (simple/complex)          │
+     │                    │                                │
+     │              ┌─────┴─────┐                          │
+     │              ▼           ▼                          │
+     │         Cloudflare    Claude/GPT-4o               │
+     │         (free)        (paid)                       │
+     │              │           │                          │
+     │              └─────┬─────┘                          │
+     │                    ▼                                │
+     └──────────────── Response ──────────────────────────┘
 ```
 
-### Option 2: Local Development
+### Chat Widget
+- Floating blue button on every authenticated page
+- Context-aware (knows which page you're on)
+- Conversation history saved to D1
+- Quick actions: Analyze scan, Suggest fixes, Explain costs
 
-#### Backend
+### Model Router
+- **Simple queries**: Routed to Cloudflare (free, fast)
+- **Complex queries**: Routed to Claude/GPT-4o (better reasoning)
+- Automatic classification based on query complexity
 
-```bash
-cd backend
+### Supported AI Providers
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+| Provider | Model | Cost |
+|----------|-------|------|
+| Cloudflare | Llama 3.1 8B / 3.2 3B | Free |
+| Anthropic | Claude Sonnet | Paid |
+| OpenAI | GPT-4o | Paid |
+| Google | Gemini Flash | Paid |
+| Groq | Llama 3.3 70B | Paid |
+| DeepSeek | DeepSeek Chat | Paid |
 
-# Install dependencies
-pip install -r requirements.txt
+---
 
-# Set environment variables
-export DATABASE_URL=postgresql://costdetective:password@localhost:5432/costdetective
-export JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+## Infrastructure & AI Visualizer
 
-# Start the server
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+### Pre-Apply Analysis
+
+Before applying your Terraform/CloudFormation, see exactly how everything connects:
+
+1. Paste code or clone a repo
+2. Click **Pre-Apply** button
+3. View hierarchical architecture diagram
+4. See resource connections and flow
+5. Get cost estimate and issue detection
+
+### Architecture Diagram
+
+Two visualization modes:
+- **Visual**: Expandable tree with colored icons and resource details
+- **ASCII**: Copy-pasteable text diagram for documentation
+
+Example output:
 ```
-
-#### Frontend
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
+AWS Account
+└── Terraform Resources
+    ├── VPC (10.0.0.0/16)
+    │   ├── Subnet-A (10.0.1.0/24)
+    │   │   └── EC2 Instance (t3.micro)
+    │   ├── Subnet-B (10.0.2.0/24)
+    │   │   └── EKS Node Group
+    │   └── Security Group
+    └── EKS Cluster
+        └── Kubernetes
 ```
-
-### Option 3: Cloud Deployment
-
-See [Deployment Guide](#deployment) for AWS, Cloudflare, and Kubernetes instructions.
 
 ---
 
@@ -235,314 +269,38 @@ See [Deployment Guide](#deployment) for AWS, Cloudflare, and Kubernetes instruct
 ### Environment Variables
 
 #### Required
+| Variable | Description |
+|----------|-------------|
+| `POSTGRES_PASSWORD` | Database password |
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `POSTGRES_PASSWORD` | Database password | `your-secure-password` |
+#### Optional — AI Providers
+Set ONE API key for paid AI analysis:
 
-#### Optional - AI Providers
+| Variable | Provider |
+|----------|----------|
+| `ANTHROPIC_API_KEY` | Claude |
+| `OPENAI_API_KEY` | GPT-4o |
+| `GOOGLE_API_KEY` | Gemini |
+| `GROQ_API_KEY` | Llama 3 |
 
-Set **one** API key to enable AI-powered analysis:
-
-| Variable | Provider | Default Model |
-|----------|----------|---------------|
-| `ANTHROPIC_API_KEY` | Claude | claude-sonnet-4-6 |
-| `OPENAI_API_KEY` | GPT-4o | gpt-4o |
-| `GOOGLE_API_KEY` | Gemini | gemini-2.0-flash |
-| `GROQ_API_KEY` | Llama 3 | llama-3.3-70b-versatile |
-| `DEEPSEEK_API_KEY` | DeepSeek | deepseek-chat |
-| `XAI_API_KEY` | Grok | grok-3 |
-| `MISTRAL_API_KEY` | Mistral | mistral-large-latest |
-
-#### Optional - Runtime
-
+#### Optional — Runtime
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEBUG` | `false` | Enable Swagger UI and debug mode |
-| `ENABLE_METRICS` | `false` | Enable Prometheus metrics |
+| `DEBUG` | `false` | Enable Swagger UI |
 | `MAX_CONCURRENT_SCANS` | `5` | Platform-wide scan limit |
-| `ANALYSIS_RETENTION_DAYS` | `2` | Auto-delete old analyses |
-
-### Cloud Credentials
-
-Credentials are entered through the UI and **never stored in the database**. They are held in memory only during scans.
-
-#### AWS
-
-1. **Access Keys** (Recommended for single accounts)
-   - Enter Access Key ID and Secret Access Key in the dashboard
-
-2. **AWS SSO**
-   - Click "AWS SSO" tab and follow the device authorization flow
-
-3. **Organizations** (Multi-account)
-   - Enable Organizations tab and enter management account credentials
-
-#### Azure
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| Subscription ID | Yes | Azure subscription to scan |
-| Tenant ID | Optional | Azure AD tenant ID |
-| Client ID | Optional | Service Principal App ID |
-| Client Secret | Optional | Service Principal secret |
-
-#### GCP
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| Project ID | Yes | GCP project to scan |
-| Service Account JSON | Optional | Service account key |
-
----
-
-## Usage Guide
-
-### Step 1: Create Account
-
-1. Navigate to `http://localhost:3000/signup`
-2. Enter your email and password
-3. Click "Create Account"
-
-### Step 2: Configure Cloud Provider
-
-1. Select your cloud provider (AWS/Azure/GCP)
-2. Enter your credentials
-3. Select regions to scan
-4. Choose services to analyze
-
-### Step 3: Run Analysis
-
-1. Click "Run Cost Analysis"
-2. Watch real-time progress via WebSocket
-3. Review the comprehensive report
-
-### Step 4: Apply Fixes
-
-1. Review each finding by severity
-2. Copy the fix command
-3. Run the command in your terminal
-4. Re-scan to verify improvements
-
-### Understanding the Report
-
-#### Severity Levels
-
-| Level | Color | Action |
-|-------|-------|--------|
-| HIGH | Red | Fix immediately - significant savings |
-| MEDIUM | Yellow | Fix when possible - moderate savings |
-| LOW | Blue | Optimize when convenient - minor improvements |
-
-#### Issue Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| Unused | Resource not being used | Stopped EC2 instance |
-| Over-provisioned | Resource larger than needed | m5.xlarge running at 5% CPU |
-| Misconfigured | Security or cost risk | Public database |
-| Non-optimized | Could be cheaper | gp2 EBS volume |
-
----
-
-## AI Engine
-
-### Supported Providers
-
-| Provider | Model | Speed | Quality | Cost |
-|----------|-------|-------|---------|------|
-| Anthropic | Claude Sonnet | Fast | Excellent | $$ |
-| OpenAI | GPT-4o | Fast | Excellent | $$ |
-| Google | Gemini Flash | Fast | Very Good | $ |
-| Groq | Llama 3.3 70B | Very Fast | Good | $ |
-| DeepSeek | DeepSeek Chat | Fast | Good | $ |
-| AWS Bedrock | Nova Pro | Fast | Very Good | $$ |
-| Local | Ollama | Variable | Good | Free |
-
-### Using AI Analysis
-
-1. Set one API key in `backend/.env`
-2. Restart the backend: `docker compose restart backend`
-3. Run a scan - AI analysis is automatic
-
-### Rule-Based Engine (Free)
-
-If no AI key is set, the built-in rule engine provides analysis at no cost. It covers:
-- EC2 right-sizing
-- EBS volume optimization
-- RDS configuration
-- S3 lifecycle policies
-- Lambda memory optimization
-- Security group auditing
-
----
-
-## Infrastructure Visualizer
-
-### Features
-
-- **Interactive Canvas**: Drag-and-drop nodes, zoom, pan
-- **Connection Lines**: Visual resource dependencies
-- **Error Detection**: Broken references highlighted in red
-- **Cost Overlay**: Monthly cost displayed on each resource
-- **Configuration Panel**: Full resource details on click
-
-### Usage
-
-1. Navigate to `/infra-visualizer`
-2. Enter a local project path or Git URL
-3. Click "Scan Project"
-4. Interact with the diagram
-
-### Supported Formats
-
-| Format | Extension | Status |
-|--------|-----------|--------|
-| Terraform | `.tf` | Full support |
-| CloudFormation | `.yaml`, `.json` | Full support |
-| Kubernetes | `.yaml` | Partial support |
-
-### Connection Validation
-
-The visualizer detects:
-- **Broken References**: Resources referencing non-existent items
-- **Security Issues**: Open security groups, public databases
-- **Cost Problems**: Unattached volumes, idle resources
-- **Best Practice Violations**: Missing encryption, no lifecycle policies
-
----
-
-## Free Tier Tracking
-
-### AWS Free Tier
-
-| Service | Type | Monthly Limit |
-|---------|------|---------------|
-| EC2 | 12-month | 750 hours (t2/t3.micro) |
-| Lambda | Always Free | 1M requests + 400K GB-seconds |
-| S3 | 12-month | 5 GB storage |
-| RDS | 12-month | 750 hours + 20 GB |
-| DynamoDB | Always Free | 25 GB + 25 RCU/WCU |
-| CloudFront | Always Free | 1 TB transfer |
-
-### Azure Free Tier
-
-| Service | Type | Monthly Limit |
-|---------|------|---------------|
-| Virtual Machines | 12-month | 750 hours (B1s/B1ms) |
-| Functions | Always Free | 1M executions |
-| Cosmos DB | Always Free | 1000 RU/s + 25 GB |
-| Storage | 12-month | 5 GB Blob |
-
-### GCP Free Tier
-
-| Service | Type | Monthly Limit |
-|---------|------|---------------|
-| Compute Engine | Always Free | 744 hours (f1-micro) |
-| Cloud Functions | Always Free | 2M invocations |
-| Cloud Storage | Always Free | 5 GB |
-| Firestore | Always Free | 1 GB storage |
-
-### Real-Time Usage
-
-Navigate to `/free-tier/usage` to see:
-- Current usage vs limits
-- Remaining capacity
-- Health score
-- Warnings when approaching limits
-
----
-
-## API Reference
-
-### Authentication
-
-```bash
-# Signup
-POST /api/auth/signup
-{
-  "email": "user@example.com",
-  "password": "secure-password"
-}
-
-# Login
-POST /api/auth/login
-{
-  "email": "user@example.com",
-  "password": "secure-password"
-}
-```
-
-### Scanning
-
-```bash
-# Start Analysis
-POST /api/analyze
-{
-  "cloud_provider": "aws",
-  "regions": ["us-east-1", "eu-west-1"],
-  "services": ["ec2", "rds", "s3"],
-  "aws_access_key_id": "AKIA...",
-  "aws_secret_access_key": "..."
-}
-
-# WebSocket Progress
-WS /ws/progress/{analysis_id}
-
-# Get Results
-GET /api/history/{analysis_id}
-```
-
-### Free Tier
-
-```bash
-# Get Free Tier Info
-GET /api/free-tier?provider=aws
-
-# Get Usage
-GET /api/free-tier/usage/aws
-```
-
-### Infrastructure Visualization
-
-```bash
-# Parse Code
-POST /api/infra/parse
-{
-  "content": "resource \"aws_vpc\" \"main\" {...}",
-  "file_type": "terraform"
-}
-
-# Scan Project
-POST /api/infra/scan-project
-{
-  "directory": "/path/to/terraform/project",
-  "max_depth": 5
-}
-```
-
-Full API documentation available at `http://localhost:8000/docs` when DEBUG=true.
+| `CLOUDFLARE_WORKER_URL` | Worker URL | AI Agent endpoint |
 
 ---
 
 ## Deployment
 
-### Docker Compose (Development)
+### Docker Compose (Local Development)
 
 ```bash
 docker compose up --build -d
 ```
 
-### AWS (Production)
-
-```bash
-cd infrastructure/terraform
-terraform init
-terraform plan
-terraform apply
-```
-
-### Cloudflare AI Agent
+### Cloudflare Worker
 
 ```bash
 cd infrastructure/cloudflare
@@ -551,358 +309,33 @@ npx wrangler login
 npm run deploy:prod
 ```
 
----
-
-## Cloudflare AI Integration
-
-### Overview
-
-The Cloudflare AI Agent provides enhanced infrastructure analysis using Llama 3.1 8B running on Cloudflare's edge network. This integration offers:
-
-- **Low Latency**: AI inference at the edge, closest to users
-- **Cost Effective**: Pay-per-use pricing with generous free tier
-- **Global Scale**: Automatically scales to handle any load
-- **Privacy**: Data stays within Cloudflare's network
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Edge Network                      │
-│  ┌───────────────────────────────────────────────────────────┐ │
-│  │                    AI Agent Worker                         │ │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │ │
-│  │  │   Analyze   │  │  Validate   │  │   Explain   │       │ │
-│  │  │   Endpoint  │  │   Endpoint  │  │   Endpoint  │       │ │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │ │
-│  │         └────────────────┼────────────────┘              │ │
-│  │                          ▼                               │ │
-│  │              ┌─────────────────────┐                     │ │
-│  │              │   Cloudflare AI     │                     │ │
-│  │              │   (Llama 3.1 8B)   │                     │ │
-│  │              └─────────────────────┘                     │ │
-│  └───────────────────────────────────────────────────────────┘ │
-│                                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │    D1    │  │    KV    │  │    R2    │  │  Queues  │      │
-│  │ Database │  │  Cache   │  │ Storage  │  │  Workers │      │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Setup Instructions
-
-#### Step 1: Create Cloudflare Account
-
-1. Go to [cloudflare.com](https://dash.cloudflare.com/sign-up)
-2. Create a free account
-3. Enable Workers (free tier includes 100K requests/day)
-
-#### Step 2: Install Wrangler CLI
+### AWS Production
 
 ```bash
-npm install -g wrangler
-
-# Login to Cloudflare
-npx wrangler login
+cd infrastructure/terraform
+terraform init && terraform apply
 ```
-
-#### Step 3: Create Resources
-
-```bash
-cd infrastructure/cloudflare
-
-# Create D1 database
-npx wrangler d1 create cost-detective
-# Note the database_id from output
-
-# Create KV namespaces
-npx wrangler kv:namespace create CACHE
-npx wrangler kv:namespace create RATE_LIMIT
-# Note the id values from output
-
-# Create R2 bucket
-npx wrangler r2 bucket create cost-detective-storage
-```
-
-#### Step 4: Update Configuration
-
-Edit `wrangler.toml` with your resource IDs:
-
-```toml
-[[kv_namespaces]]
-binding = "CACHE"
-id = "your-cache-kv-id"
-preview_id = "your-cache-kv-preview-id"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "cost-detective"
-database_id = "your-d1-database-id"
-
-[[r2_buckets]]
-binding = "STORAGE"
-bucket_name = "cost-detective-storage"
-```
-
-#### Step 5: Initialize Database
-
-```bash
-npm run db:init
-```
-
-#### Step 6: Deploy
-
-```bash
-# Deploy to staging
-npm run deploy:staging
-
-# Deploy to production
-npm run deploy:prod
-```
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/agent/analyze` | POST | Analyze infrastructure code |
-| `/api/agent/validate` | POST | Security and compliance validation |
-| `/api/agent/explain` | POST | Plain English explanation |
-| `/api/agent/health` | GET | Health check |
-
-### Example Usage
-
-#### Analyze Infrastructure
-
-```bash
-curl -X POST https://your-worker.workers.dev/api/agent/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "analyze",
-    "content": "resource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}",
-    "file_type": "terraform",
-    "options": {
-      "focus": "all",
-      "provider": "aws"
-    }
-  }'
-```
-
-#### Validate Security
-
-```bash
-curl -X POST https://your-worker.workers.dev/api/agent/validate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "validate",
-    "content": "your terraform code here",
-    "file_type": "terraform"
-  }'
-```
-
-### Cost Estimation
-
-| Service | Free Tier | Paid |
-|---------|-----------|------|
-| Workers | 100K requests/day | $5/mo + $0.50/million |
-| D1 | 5GB storage, 5M reads/day | $0.75/GB stored |
-| KV | 100K reads/day | $0.50/million reads |
-| R2 | 10GB storage | $0.015/GB stored |
-| AI (Llama 3.1 8B) | 10K neurons/day | $0.011/1000 neurons |
-
-**Estimated monthly cost**: $5-20 for typical usage
-
-### Integration with Main Application
-
-The backend integrates with Cloudflare AI via HTTP calls. To enable:
-
-1. Set the Cloudflare Worker URL in `backend/.env`:
-
-```bash
-CLOUDFLARE_AI_URL=https://your-worker.workers.dev
-```
-
-2. The backend will automatically use Cloudflare AI for enhanced analysis when available, falling back to the built-in rule engine.
-
-### Monitoring
-
-View Worker logs:
-
-```bash
-npx wrangler tail
-```
-
-View D1 data:
-
-```bash
-npx wrangler d1 execute cost-detective --command "SELECT * FROM analyses LIMIT 10"
-```
-
-### Troubleshooting
-
-#### "Worker not found"
-
-```bash
-# Verify deployment
-npx wrangler deployments list
-
-# Check Worker status
-npx wrangler status
-```
-
-#### "D1 connection failed"
-
-```bash
-# Re-initialize database
-npm run db:init
-
-# Test connection
-npx wrangler d1 execute cost-detective --command "SELECT 1"
-```
-
-#### "AI model not available"
-
-- Ensure your Cloudflare account has AI enabled
-- Check [Cloudflare AI Models](https://developers.cloudflare.com/workers-ai/models/) for available models
-- Verify the model name in `src/index.ts`
-
-### Environment-Specific Configs
-
-| Environment | Database | Cache | AI |
-|-------------|----------|-------|-----|
-| Development | SQLite/In-Memory | None | Rule Engine |
-| Staging | PostgreSQL | Redis | Groq (Free) |
-| Production | Aurora PostgreSQL | ElastiCache | Claude/GPT-4o |
 
 ---
 
 ## Security
 
-### Best Practices
-
-1. **Never commit secrets** - Use `.env` files (gitignored)
-2. **Use HTTPS in production** - Configure SSL/TLS
-3. **Rotate credentials** - Change passwords regularly
-4. **Enable MFA** - For AWS/Azure/GCP accounts
-5. **Least privilege** - Use read-only IAM policies
-
-### Security Features
-
-- JWT authentication with httpOnly cookies
+- JWT with httpOnly cookies, token revocation
+- GitHub/LinkedIn/Google social login
 - Rate limiting on all endpoints
-- Input validation with Pydantic
-- CORS protection
-- Security headers (HSTS, CSP, X-Frame-Options)
-- No credential storage - memory only during scans
-
-### Reporting Security Issues
-
-If you discover a security vulnerability, please report it responsibly:
-- Email: [security@yourdomain.com]
-- Do NOT open public GitHub issues for security bugs
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-#### "Cannot connect to server"
-
-```bash
-# Check if containers are running
-docker compose ps
-
-# View logs
-docker compose logs backend
-
-# Restart services
-docker compose restart
-```
-
-#### "Analysis not found"
-
-This typically means the analysis failed. Check:
-1. Cloud credentials are valid
-2. Selected regions contain resources
-3. IAM permissions are correct
-
-#### "WebSocket connection failed"
-
-1. Ensure backend is running
-2. Check if port 8000 is accessible
-3. Verify no firewall blocking WebSocket
-
-### Resetting the Application
-
-```bash
-# Stop and remove all data
-docker compose down -v
-
-# Rebuild and start fresh
-docker compose up --build -d
-```
-
-### Viewing Logs
-
-```bash
-# All services
-docker compose logs -f
-
-# Backend only
-docker compose logs -f backend
-
-# Database only
-docker compose logs -f postgres
-```
-
----
-
-## Contributing
-
-### Development Setup
-
-1. Fork the repository from [GitHub](https://github.com/Ashokkunchala/projects)
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes
-4. Run tests: `pytest tests/` (backend), `npm test` (frontend)
-5. Commit: `git commit -m 'Add amazing feature'`
-6. Push: `git push origin feature/amazing-feature`
-7. Open a Pull Request
-
-### Code Style
-
-- **Python**: Follow PEP 8, use type hints
-- **TypeScript**: Use strict mode, prefer interfaces
-- **Commits**: Use conventional commits (feat:, fix:, docs:)
-
-### Testing
-
-```bash
-# Backend tests
-cd backend
-pytest tests/ -v
-
-# Frontend tests
-cd frontend
-npm test
-```
+- Cloud credentials never stored — memory only during scans
+- SSRF prevention with URL allowlisting
+- TLS everywhere
 
 ---
 
 ## License
 
-This project is licensed under a **Custom MIT License with Restrictions** - see the [LICENSE](LICENSE) file for details.
+Custom MIT License with Restrictions — see [LICENSE](LICENSE) for details.
 
-### Key Points
-
-- ✅ Free for personal, non-commercial use
-- ✅ Educational and research use permitted
-- ❌ Commercial use requires explicit permission
-- ❌ Cannot remove author attribution
-- ❌ Cannot distribute proprietary components
-
-For commercial licensing inquiries, contact the author.
+- Free for personal, non-commercial use
+- Educational and research use permitted
+- Commercial use requires explicit permission
 
 ---
 
@@ -911,19 +344,3 @@ For commercial licensing inquiries, contact the author.
 **Ashok Kunchala**
 - GitHub: [@Ashokkunchala](https://github.com/Ashokkunchala)
 - Repository: [AI Cloud Cost Detective](https://github.com/Ashokkunchala/projects)
-
-### Acknowledgments
-
-This project was developed by Ashok Kunchala as a comprehensive cloud cost optimization platform. The AI-powered analysis, cost estimation algorithms, cloud scanning logic, and Cloudflare AI integration represent significant intellectual property.
-
----
-
-## Support
-
-- 📖 Documentation: [README.md](README.md)
-- 🐛 Issues: [GitHub Issues](https://github.com/Ashokkunchala/projects/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/Ashokkunchala/projects/discussions)
-
----
-
-**Built with ❤️ by Ashok Kumar**

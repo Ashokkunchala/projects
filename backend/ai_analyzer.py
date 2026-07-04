@@ -1215,7 +1215,68 @@ def _bedrock_analyze(resources: dict, api_key: str) -> dict:
 
 # Full provider registry: name → (env_key, handler)
 # OpenAI-compat providers share _openai_compat_analyze via a lambda.
+# ─── Cloudflare Workers AI provider ─────────────────────────────────────────
+
+def _cloudflare_analyze(resources: dict, _api_key: str | None = None) -> dict:
+    """Analyze resources using Cloudflare Workers AI (free, no API key needed)."""
+    import httpx as _httpx
+
+    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "https://cost-detective-agent.ashokkunchla.workers.dev")
+
+    resource_lines = []
+    for service, items in resources.items():
+        if not items:
+            continue
+        for r in items[:15]:
+            rid = r.get("id", r.get("name", "?"))
+            rtype = r.get("instance_type", r.get("type", ""))
+            region = r.get("region", "")
+            state = r.get("state", r.get("status", ""))
+            extra = f" state={state}" if state else ""
+            resource_lines.append(f"- {service} {rid} type={rtype} region={region}{extra}")
+
+    resource_block = "\n".join(resource_lines)
+
+    prompt = f"""Analyze the following AWS resources and identify cost optimization issues.
+For each issue found, provide: service, resource_name, resource_id, region, issue_type (over-provisioned|unused|misconfigured|non-optimized), severity (high|medium|low), explanation, fix_command, potential_monthly_savings.
+
+Resources to analyze:
+{resource_block}
+
+Output ONLY a JSON object with these fields:
+- summary (string): brief analysis summary
+- total_resources (number)
+- issues_found (number)
+- estimated_monthly_savings (number)
+- estimated_annual_savings (number)
+- issues (array of objects with: service, resource_name, resource_id, region, account_id, account_name, issue_type, severity, explanation, fix_command, potential_monthly_savings)
+
+Respond with valid JSON only, no other text."""
+
+    try:
+        with _httpx.Client(timeout=120) as client:
+            resp = client.post(
+                f"{worker_url}/api/agent/complete",
+                json={"prompt": prompt, "system": "You are an AWS cost optimization expert. Output only valid JSON.", "max_tokens": 4096, "temperature": 0.15},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            raw = body.get("response", "")
+            import re as _re
+            match = _re.search(r'\{[\s\S]*\}', raw)
+            if match:
+                result = json.loads(match.group())
+                return _normalize(result)
+            logger.warning("ai.cloudflare_no_json", extra={"raw_preview": raw[:200]})
+    except Exception as e:
+        logger.warning("ai.cloudflare_failed", extra={"error": str(e)})
+
+    return _rule_based_for_provider(resources)
+
+
 _PROVIDER_REGISTRY: dict[str, tuple[str | None, callable]] = {
+    # No-api-key providers first
+    "cloudflare": (None,                   _cloudflare_analyze),
     # Native SDKs
     "anthropic":  ("ANTHROPIC_API_KEY",    _anthropic_analyze),
     "google":     ("GOOGLE_API_KEY",       _google_analyze),
@@ -1229,8 +1290,9 @@ _PROVIDER_REGISTRY: dict[str, tuple[str | None, callable]] = {
        for name, cfg in _OPENAI_COMPAT.items()},
 }
 
-# Priority order when AI_PROVIDER is not set
+# Priority order when AI_PROVIDER is not set (cloudflare is free, checked first)
 _DETECTION_ORDER = [
+    "cloudflare",
     "anthropic", "openai", "google", "gemini",
     "groq", "deepseek", "xai", "mistral", "cohere",
     "together", "perplexity", "azure", "bedrock", "ollama",
@@ -1252,11 +1314,18 @@ def _get_provider() -> tuple[str, str | None]:
             return "none", None
         return explicit, api_key
 
-    # Auto-detect
+    # Auto-detect: check key-less providers first (cloudflare is free, no key needed)
     for name in _DETECTION_ORDER:
         env_key, _ = _PROVIDER_REGISTRY[name]
         if env_key is None:
-            # Key-less provider (bedrock, ollama) — only used when explicitly set
+            # Key-less provider (cloudflare, bedrock, ollama) — use if available
+            if name == "cloudflare":
+                worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "").strip()
+                if not worker_url:
+                    # Default worker URL exists, Cloudflare is always available
+                    return name, None
+                return name, None
+            # bedrock, ollama — only used when explicitly set
             continue
         api_key = os.getenv(env_key, "").strip()
         if api_key:

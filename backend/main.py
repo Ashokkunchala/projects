@@ -121,6 +121,22 @@ async def lifespan(app: FastAPI):
     await db.create_tables()
     await db.fail_stale_analyses()
     await _redis_client.init_redis()
+
+    # Guard: refuse to run with multiple workers without Redis
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    if workers > 1 and _redis_client.is_fallback():
+        logger.error(
+            "startup.multi_worker_no_redis",
+            extra={
+                "workers": workers,
+                "detail": (
+                    "UVICORN_WORKERS > 1 requires Redis for shared state. "
+                    "Rate limiting, SSO sessions, and scan progress will break silently "
+                    "across processes. Set UVICORN_WORKERS=1 or configure REDIS_URL."
+                ),
+            },
+        )
+
     # Run an immediate purge on startup, then every 12 hours
     asyncio.create_task(_history_purge_loop())
     yield
@@ -552,118 +568,9 @@ GCP_SERVICES = [
 VALID_GCP_SERVICE_IDS = {s["id"] for s in GCP_SERVICES}
 
 
-# ─── auth endpoints ───────────────────────────────────────────────────────────
-
-@app.post("/api/auth/signup", status_code=201)
-async def signup(req: AuthRequest, request: Request, response: Response):
-    ip = request.client.host if request.client else "unknown"
-    await _check_rate_limit(f"signup:ip:{ip}", max_attempts=10, window_seconds=300)
-    await _check_rate_limit(f"signup:email:{req.email}", max_attempts=5, window_seconds=300)
-
-    existing = await db.get_user_by_email(req.email)
-    if existing:
-        raise HTTPException(status_code=400, detail="This email is already signed up. Please try with a new email ID or reach out to the admin.")
-
-    pw_hash = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
-    user = await db.create_user(req.email, pw_hash)
-    if not user:
-        raise HTTPException(status_code=500, detail="Could not create user")
-
-    token = _create_token(user["id"], user["email"])
-    response.set_cookie(
-        "token", token,
-        httponly=True, samesite="strict", secure=_COOKIE_SECURE,
-        max_age=JWT_EXPIRY_HOURS * 3600,
-    )
-    return {"user": {"id": user["id"], "email": user["email"]}}
-
-
-@app.post("/api/auth/login")
-async def login(req: LoginRequest, request: Request, response: Response):
-    ip = request.client.host if request.client else "unknown"
-    # Rate limit by IP first (catches credential stuffing), then by email
-    await _check_rate_limit(f"login:ip:{ip}", max_attempts=20, window_seconds=60)
-    await _check_rate_limit(f"login:email:{req.email}", max_attempts=10, window_seconds=60)
-
-    user = await db.get_user_by_email(req.email)
-
-    # Always run bcrypt even when user is absent — prevents timing-based enumeration
-    stored_hash = user["password_hash"].encode() if user else _DUMMY_HASH.encode()
-    password_ok = bcrypt.checkpw(req.password.encode(), stored_hash)
-
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found for this email address.")
-    if not password_ok:
-        raise HTTPException(status_code=401, detail="Incorrect password.")
-
-    token = _create_token(user["id"], user["email"])
-    response.set_cookie(
-        "token", token,
-        httponly=True, samesite="strict", secure=_COOKIE_SECURE,
-        max_age=JWT_EXPIRY_HOURS * 3600,
-    )
-    return {"user": {"id": user["id"], "email": user["email"]}}
-
-
-@app.post("/api/auth/logout")
-async def logout(response: Response, user_info: dict = Depends(_verify_token)):
-    jti = user_info.get("jti")
-    if jti:
-        from datetime import datetime, timezone
-        exp = user_info.get("exp")
-        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else None
-        await db.revoke_token(jti, expires_at)
-    response.delete_cookie("token", samesite="strict")
-    return {"status": "logged out"}
-
-
-@app.get("/api/auth/me")
-async def get_me(user_info: dict = Depends(_verify_token)):
-    user = await db.get_user_by_id(user_info["user_id"])
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"id": user["id"], "email": user["email"]}
-
-
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
-
-
-@app.post("/api/auth/change-password")
-async def change_password(req: ChangePasswordRequest, user_info: dict = Depends(_verify_token)):
-    await _check_rate_limit(f"change-password:{user_info['user_id']}", max_attempts=5, window_seconds=300)
-
-    user = await db.get_user_by_id(user_info["user_id"])
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if not bcrypt.checkpw(req.current_password.encode(), user["password_hash"].encode()):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-
-    new_hash = bcrypt.hashpw(req.new_password.encode(), bcrypt.gensalt()).decode()
-    await db.update_user_password(user_info["user_id"], new_hash)
-    return {"message": "Password updated successfully"}
-
-
-# ─── config endpoints ────────────────────────────────────────────────────────
-
-@app.get("/api/regions")
-async def get_regions(provider: str = "aws", _: dict = Depends(_verify_token)):
-    if provider == "azure":
-        return {"regions": AZURE_REGIONS}
-    if provider == "gcp":
-        return {"regions": GCP_REGIONS}
-    return {"regions": AWS_REGIONS}
-
-
-@app.get("/api/services")
-async def get_services(provider: str = "aws", _: dict = Depends(_verify_token)):
-    if provider == "azure":
-        return {"services": AZURE_SERVICES}
-    if provider == "gcp":
-        return {"services": GCP_SERVICES}
-    return {"services": AWS_SERVICES}
 
 
 def _is_sso_expiry_error(exc: Exception) -> bool:
@@ -687,26 +594,6 @@ def _is_sso_expiry_error(exc: Exception) -> bool:
     # Narrow text fallback for non-botocore exceptions (e.g. third-party wrappers)
     msg = str(exc).lower()
     return ("expired" in msg or "not authorized" in msg) and ("sso" in msg or "token" in msg)
-
-
-@app.get("/api/config/accounts")
-async def get_org_accounts(_: dict = Depends(_verify_token)):
-    """Return all accounts from ~/.aws/config SSO profiles, merged with any custom entries in cloud_accounts.json."""
-    from cloud_organizations import _build_sso_profile_map, load_accounts_from_file
-
-    sso_map = _build_sso_profile_map()
-
-    accounts = [
-        {"account_id": aid, "name": name, "email": "", "profile_name": name}
-        for aid, name in sorted(sso_map.items())
-    ]
-
-    sso_ids = set(sso_map.keys())
-    for acct in load_accounts_from_file():
-        if acct.get("account_id") not in sso_ids:
-            accounts.append(acct)
-
-    return {"accounts": accounts}
 
 
 class AccountRequest(BaseModel):
@@ -735,74 +622,6 @@ def _write_accounts_inplace(filepath: str, accounts: list):
     else:
         with open(filepath, "w") as f:
             f.write(content)
-
-
-@app.post("/api/config/accounts")
-async def add_account(req: AccountRequest, _: dict = Depends(_verify_token)):
-    """Add a custom account entry. SSO accounts are auto-detected and don't need to be added here."""
-    from cloud_organizations import _build_sso_profile_map
-    filepath = os.getenv("AWS_ACCOUNTS_FILE", "/app/cloud_accounts.json")
-
-    sso_map = _build_sso_profile_map()
-    if req.account_id in sso_map:
-        return {"account": {
-            "account_id": req.account_id,
-            "name": sso_map[req.account_id],
-            "email": "",
-            "profile_name": sso_map[req.account_id],
-        }}
-
-    async with _accounts_file_lock:
-        def _read() -> list:
-            if not os.path.exists(filepath):
-                return []
-            try:
-                with open(filepath) as f:
-                    return _json.load(f).get("accounts", [])
-            except Exception:
-                return []
-
-        accounts = await asyncio.to_thread(_read)
-
-        if any(a.get("account_id") == req.account_id for a in accounts):
-            raise HTTPException(status_code=400, detail="Account already exists")
-
-        new_entry = {
-            "account_id": req.account_id,
-            "name": req.name,
-            "email": req.email,
-            "profile_name": sso_map.get(req.account_id, ""),
-            "role_arn": req.role_arn if req.role_arn else f"arn:aws:iam::{req.account_id}:role/CostDetectiveRole",
-        }
-        accounts.append(new_entry)
-        await asyncio.to_thread(_write_accounts_inplace, filepath, accounts)
-
-    return {"account": new_entry}
-
-
-@app.delete("/api/config/accounts/{account_id}")
-async def remove_account(account_id: str, _: dict = Depends(_verify_token)):
-    """Remove a custom account from cloud_accounts.json."""
-    if not VALID_ACCOUNT_RE.match(account_id):
-        raise HTTPException(status_code=400, detail="account_id must be exactly 12 digits")
-    filepath = os.getenv("AWS_ACCOUNTS_FILE", "/app/cloud_accounts.json")
-
-    async with _accounts_file_lock:
-        def _read() -> list:
-            if not os.path.exists(filepath):
-                return []
-            try:
-                with open(filepath) as f:
-                    return _json.load(f).get("accounts", [])
-            except Exception:
-                return []
-
-        accounts = await asyncio.to_thread(_read)
-        updated = [a for a in accounts if a.get("account_id") != account_id]
-        if updated != accounts:
-            await asyncio.to_thread(_write_accounts_inplace, filepath, updated)
-
-    return {"status": "removed"}
 
 
 # ─── pre-scan credential validation ─────────────────────────────────────────
@@ -863,181 +682,7 @@ class ValidateRequest(BaseModel):
         return v
 
 
-@app.post("/api/validate")
-async def validate_credentials(req: ValidateRequest, user_info: dict = Depends(_verify_token)):
-    """
-    Lightweight pre-flight check that verifies credentials/connectivity for the
-    chosen cloud provider BEFORE starting a full scan.  Returns 200 on success or
-    400 with a human-readable detail string on failure.
-    """
-    await _check_rate_limit(f"validate:{user_info['user_id']}", max_attempts=10, window_seconds=60)
-    provider = req.cloud_provider.lower()
 
-    # ── AWS ───────────────────────────────────────────────────────────────────
-    if provider == "aws":
-        import boto3 as _b3
-        import botocore.exceptions
-
-        # SSO pre-authenticated credentials — validate with a quick STS call
-        if req.sso_credentials:
-            try:
-                sc = req.sso_credentials[0]
-                sess = _b3.Session(
-                    aws_access_key_id=sc.access_key,
-                    aws_secret_access_key=sc.secret_key,
-                    aws_session_token=sc.session_token or None,
-                )
-                identity = sess.client("sts", region_name="us-east-1").get_caller_identity()
-                account = identity.get("Account", "")
-                n = len(req.sso_credentials)
-                return {"ok": True, "message": f"SSO credentials verified — {n} account{'s' if n != 1 else ''} ready to scan"}
-            except Exception:
-                raise HTTPException(
-                    status_code=400,
-                    detail="SSO credentials have expired. Please re-authenticate via AWS SSO in Settings.",
-                )
-
-        key_id = (req.aws_access_key_id or "").strip()
-        secret  = (req.aws_secret_access_key or "").strip()
-        use_org = req.use_organizations
-        if not key_id or not secret:
-            if not use_org:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Enter your AWS Access Key ID and Secret Access Key in the Settings panel.",
-                )
-        try:
-            if key_id and secret:
-                session = _b3.Session(aws_access_key_id=key_id, aws_secret_access_key=secret)
-            else:
-                # Organizations mode — uses server-side SSO profiles
-                session = _b3.Session()
-            sts = session.client("sts", region_name="us-east-1")
-            identity = sts.get_caller_identity()
-            account = identity.get("Account", "")
-        except botocore.exceptions.NoCredentialsError:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "AWS credentials not found. Enter your Access Key ID and Secret Access Key in the Settings panel."
-                ),
-            )
-        except botocore.exceptions.ProfileNotFound:
-            raise HTTPException(status_code=400, detail="AWS SSO profile not found. Run 'aws sso login' on the host and ensure ~/.aws/config is mounted.")
-        except Exception as e:
-            if _is_sso_expiry_error(e):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Your AWS Organizations session has expired. "
-                        "Please run 'aws sso login' to re-authenticate."
-                    ),
-                )
-            raise HTTPException(
-                status_code=400,
-                detail="AWS credential check failed. Verify your credentials are configured correctly.",
-            )
-
-        # If Organizations mode, verify the SSO profiles for selected accounts
-        if req.use_organizations and req.accounts:
-            from cloud_organizations import _build_sso_profile_map
-            sso_map = _build_sso_profile_map()
-            missing = [aid for aid in req.accounts if aid not in sso_map]
-            if missing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"No SSO profile found for account(s): {', '.join(missing)}. "
-                        "Run 'aws sso login' or add the account manually."
-                    ),
-                )
-
-        return {"ok": True, "message": f"AWS credentials verified (account: {account})"}
-
-    # ── Azure ─────────────────────────────────────────────────────────────────
-    elif provider == "azure":
-        if not _AZURE_AVAILABLE:
-            raise HTTPException(
-                status_code=400,
-                detail="Azure SDK not installed. Rebuild the backend container.",
-            )
-        sub_id = _validate_subscription_id(req.subscription_id or "")
-        _az_tenant = (req.azure_tenant_id or "").strip()
-        _az_client = (req.azure_client_id or "").strip()
-        _az_secret = (req.azure_client_secret or "").strip()
-        try:
-            from azure.mgmt.resource import SubscriptionClient as _SubClient
-            import azure_scanner as _az
-            cred = _az._get_credential(_az_tenant, _az_client, _az_secret)
-            sub_client = _SubClient(cred)
-            sub = sub_client.subscriptions.get(sub_id)
-            sub_name = sub.display_name or sub_id
-        except HTTPException:
-            raise
-        except Exception as e:
-            msg = str(e).lower()
-            if "not found" in msg or "does not exist" in msg or "404" in msg:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Azure subscription not found. Verify the Subscription ID and your account permissions.",
-                )
-            if "credential" in msg or "authentication" in msg or "unauthorized" in msg or "401" in msg:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Azure credentials could not be verified. "
-                        "Enter your Tenant ID, Client ID, and Client Secret in the Azure Credentials panel, "
-                        "or ensure DefaultAzureCredential is available on the server."
-                    ),
-                )
-            raise HTTPException(status_code=400, detail="Azure validation failed. Check your credentials and subscription ID.")
-
-        return {"ok": True, "message": f"Azure credentials verified (subscription: {sub_name})"}
-
-    # ── GCP ───────────────────────────────────────────────────────────────────
-    elif provider == "gcp":
-        if not _GCP_AVAILABLE:
-            raise HTTPException(
-                status_code=400,
-                detail="GCP SDK not installed. Rebuild the backend container.",
-            )
-        proj_id = _validate_project_id(req.project_id or "")
-        try:
-            import gcp_scanner as _gcp
-            from googleapiclient.discovery import build as _gcp_build
-            api_key = (req.gcp_api_key or "").strip()
-            creds = _gcp._get_credentials_from_key(api_key) if api_key else _gcp._get_credentials()
-            if creds is None:
-                # Raw API key (not JSON) — build with developerKey
-                svc = _gcp_build("cloudresourcemanager", "v1", developerKey=api_key)
-            else:
-                svc = _gcp_build("cloudresourcemanager", "v1", credentials=creds)
-            project = svc.projects().get(projectId=proj_id).execute()
-            proj_name = project.get("name", proj_id)
-        except HTTPException:
-            raise
-        except Exception as e:
-            msg = str(e).lower()
-            if "not found" in msg or "404" in msg:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GCP project not found. Verify the Project ID and your account permissions.",
-                )
-            if "credential" in msg or "authentication" in msg or "unauthorized" in msg or "403" in msg:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "GCP credentials could not be verified. "
-                        "Set GOOGLE_APPLICATION_CREDENTIALS or GCP_CREDENTIALS_JSON "
-                        "environment variable."
-                    ),
-                )
-            raise HTTPException(status_code=400, detail="GCP validation failed. Check your credentials and project ID.")
-
-        return {"ok": True, "message": f"GCP credentials verified (project: {proj_name})"}
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown cloud provider: {provider}")
 
 
 # ─── analysis progress helpers ───────────────────────────────────────────────
@@ -1198,8 +843,42 @@ async def _run_analysis(analysis_id: str, user_id: int, req: AnalyzeRequest):
                 ),
             )
 
+            await _push(analysis_id, "Generating AI summary...")
+            ai_summary = None
+            try:
+                from cloudflare_ai import chat_completion
+                issues_preview = json.dumps(result.get("issues", [])[:15])
+                summary_prompt = (
+                    f"Summarize this cloud cost analysis in 2-3 sentences. "
+                    f"Provider: {provider}. "
+                    f"Resources scanned: {result.get('total_resources', 0)}. "
+                    f"Issues found: {result.get('issues_found', 0)}. "
+                    f"Estimated savings: ${result.get('estimated_monthly_savings', 0):.2f}/month. "
+                    f"Top issues: {issues_preview}"
+                )
+                ai_summary = await chat_completion(
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    context={"page": "/report", "analysis_result": result},
+                )
+            except Exception as e:
+                logger.warning("ai_summary.failed", extra={"error": str(e)})
+
+            # Add raw resources to result for InfraVisualizer
+            raw_resources = {}
+            for svc, items in resources.items():
+                for r in items[:10]:  # Limit per service to avoid huge payloads
+                    rid = r.get("id", r.get("name", ""))
+                    if rid:
+                        raw_resources[rid] = {
+                            "type": r.get("type", svc),
+                            "name": r.get("name", rid),
+                            "region": r.get("region", ""),
+                            "config": {k: v for k, v in r.items() if k not in ("Tags", "tags") and isinstance(v, (str, int, float, bool))},
+                        }
+            result["raw_resources"] = raw_resources
+
             await _push(analysis_id, "Saving results...")
-            await db.update_analysis(analysis_id, result)
+            await db.update_analysis(analysis_id, result, ai_summary=ai_summary)
             await _push(analysis_id, "Analysis complete!", status="complete", data=result)
 
     except BaseException as e:
@@ -1219,159 +898,7 @@ async def _run_analysis(analysis_id: str, user_id: int, req: AnalyzeRequest):
         await _redis_client.progress_delete(analysis_id)
 
 
-# ─── analyze endpoint ────────────────────────────────────────────────────────
 
-@app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest, user_info: dict = Depends(_verify_token)):
-    provider = req.cloud_provider
-
-    # Pick the correct region and service sets for validation
-    if provider == "azure":
-        valid_regions = set(AZURE_REGIONS)
-        valid_services = VALID_AZURE_SERVICE_IDS
-    elif provider == "gcp":
-        valid_regions = set(GCP_REGIONS)
-        valid_services = VALID_GCP_SERVICE_IDS
-    else:
-        valid_regions = set(AWS_REGIONS)
-        valid_services = VALID_SERVICE_IDS
-
-    invalid_regions = [r for r in req.regions if r not in valid_regions]
-    if invalid_regions:
-        raise HTTPException(status_code=400, detail=f"Unknown region(s): {', '.join(invalid_regions)}")
-
-    invalid_services = [s for s in req.services if s not in valid_services]
-    if invalid_services:
-        raise HTTPException(status_code=400, detail=f"Unknown service(s): {', '.join(invalid_services)}")
-
-    if provider == "aws" and req.use_organizations and req.accounts is not None and len(req.accounts) == 0:
-        raise HTTPException(status_code=400, detail="Select at least one account when using Organizations mode")
-
-    analysis_id = str(uuid.uuid4())
-    user_id = user_info["user_id"]
-
-    # Per-user concurrent analysis cap — prevents DoS flooding the queue
-    _running = await db.get_running_analyses_for_user(user_id)
-    _running_ids = {a["id"] for a in (_running or [])}
-    if len(_running_ids) >= _MAX_ANALYSES_PER_USER:
-        raise HTTPException(
-            status_code=429,
-            detail=f"You already have {_MAX_ANALYSES_PER_USER} analyses running. Wait for one to finish.",
-        )
-
-    # Validate cloud-specific ID formats before touching any SDK
-    if provider == "azure":
-        _validate_subscription_id(req.subscription_id or "")
-    if provider == "gcp":
-        _validate_project_id(req.project_id or "")
-
-    await db.create_analysis(
-        analysis_id, user_id, req.regions, req.services,
-        req.accounts or [], cloud_provider=provider,
-    )
-    asyncio.create_task(_run_analysis(analysis_id, user_id, req))
-
-    return {"analysis_id": analysis_id, "status": "started"}
-
-
-# ─── WebSocket progress ──────────────────────────────────────────────────────
-
-@app.websocket("/ws/progress/{analysis_id}")
-async def ws_progress(websocket: WebSocket, analysis_id: str):
-    # Read token from httpOnly cookie sent automatically by the browser
-    token = websocket.cookies.get("token", "")
-    user_info = _verify_token_str(token)
-    if not user_info:
-        await websocket.close(code=4001)
-        return
-    await websocket.accept()
-
-    # Ownership check FIRST — always verify before sending any data
-    # get_analysis_by_id checks user_id so cross-user access returns None
-    saved = await db.get_analysis_by_id(analysis_id, user_info["user_id"])
-    progress_msgs = await _redis_client.progress_get_all(analysis_id)
-    in_flight = len(progress_msgs) > 0 and progress_msgs[-1].get("status") not in ("complete", "error")
-
-    if not in_flight and not saved:
-        await websocket.send_json({"message": "Analysis not found", "status": "error"})
-        return
-
-    if in_flight and saved is None:
-        # Running but not owned by this user — deny immediately, no data leaked
-        await websocket.send_json({"message": "Access denied", "status": "error"})
-        return
-
-    # Analysis already finished — replay final result from DB
-    if not in_flight:
-        if saved and saved.get("analysis_result"):
-            await websocket.send_json({"message": "Analysis complete!", "status": "complete", "data": saved["analysis_result"]})
-        elif saved and saved.get("status") == "failed":
-            await websocket.send_json({"message": saved.get("error_message", "Analysis failed"), "status": "error"})
-        else:
-            await websocket.send_json({"message": "Analysis not found", "status": "error"})
-        return
-
-    sent_index = len(progress_msgs)
-    idle_ticks = 0
-    keepalive_ticks = 0
-
-    try:
-        while True:
-            messages = await _redis_client.progress_get_all(analysis_id)
-
-            if messages:
-                idle_ticks = 0
-                keepalive_ticks = 0
-                for msg in messages[sent_index:]:
-                    await websocket.send_json(msg)
-                    sent_index += 1
-                    if msg.get("status") in ("complete", "error"):
-                        return
-            else:
-                idle_ticks += 1
-                if idle_ticks > 300:
-                    await websocket.send_json({"message": "Analysis not found", "status": "error"})
-                    return
-
-            keepalive_ticks += 1
-            if keepalive_ticks >= 100:  # every 10 seconds
-                keepalive_ticks = 0
-                await websocket.send_json({"message": "", "status": "keepalive"})
-
-            await asyncio.sleep(0.1)
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        logger.warning("websocket.error", extra={"analysis_id": analysis_id, "error": str(exc)})
-
-
-# ─── history endpoints ───────────────────────────────────────────────────────
-
-@app.get("/api/history")
-async def get_history(
-    user_info: dict = Depends(_verify_token),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-):
-    analyses = await db.get_analyses_by_user(user_info["user_id"], limit=limit, offset=offset)
-    return {"analyses": analyses}
-
-
-@app.get("/api/history/{analysis_id}")
-async def get_analysis(analysis_id: str, user_info: dict = Depends(_verify_token)):
-    analysis = await db.get_analysis_by_id(analysis_id, user_info["user_id"])
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    return analysis
-
-
-@app.delete("/api/history/{analysis_id}", status_code=200)
-async def delete_analysis(analysis_id: str, user_info: dict = Depends(_verify_token)):
-    deleted = await db.delete_analysis(analysis_id, user_info["user_id"])
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    return {"status": "deleted"}
 
 
 # ─── cost explorer endpoints ──────────────────────────────────────
@@ -1383,124 +910,7 @@ class CostExplorerRequest(BaseModel):
     days: int = 30
 
 
-@app.post("/api/cost/explorer", include_in_schema=_DEBUG)
-async def cost_explorer(req: CostExplorerRequest, user_info: dict = Depends(_verify_token)):
-    """Fetch real AWS cost data from Cost Explorer API for the last N days."""
-    import cost_explorer as _ce
-    data = await asyncio.get_running_loop().run_in_executor(
-        None,
-        lambda: _ce.get_cost_data(
-            access_key=req.aws_access_key_id or "",
-            secret_key=req.aws_secret_access_key or "",
-            session_token=req.aws_session_token or "",
-            days=req.days,
-        ),
-    )
-    return data
 
-
-@app.post("/api/cost/forecast", include_in_schema=_DEBUG)
-async def cost_forecast(req: CostExplorerRequest, user_info: dict = Depends(_verify_token)):
-    """Get 90-day AWS cost forecast."""
-    import cost_explorer as _ce
-    data = await asyncio.get_running_loop().run_in_executor(
-        None,
-        lambda: _ce.get_cost_forecast(
-            access_key=req.aws_access_key_id or "",
-            secret_key=req.aws_secret_access_key or "",
-            session_token=req.aws_session_token or "",
-        ),
-    )
-    return data
-
-
-@app.get("/api/cost/awareness", include_in_schema=_DEBUG)
-async def cost_awareness(
-    category: Optional[str] = Query(default=None),
-    limit: int = Query(default=10, ge=1, le=50),
-    _: dict = Depends(_verify_token),
-):
-    """Get AWS cost policy and feature update awareness items."""
-    import cost_awareness as _ca
-    return _ca.get_awareness_items(category=category, limit=limit)
-
-
-@app.post("/api/cost/variation", include_in_schema=_DEBUG)
-async def cost_variation(req: CostExplorerRequest, user_info: dict = Depends(_verify_token)):
-    """Get cost variation across 1, 3, 6, and 9 month periods with per-service trends."""
-    import cost_explorer as _ce
-    data = await asyncio.get_running_loop().run_in_executor(
-        None,
-        lambda: _ce.get_cost_variation(
-            access_key=req.aws_access_key_id or "",
-            secret_key=req.aws_secret_access_key or "",
-            session_token=req.aws_session_token or "",
-        ),
-    )
-    return data
-
-
-@app.post("/api/cost/rightsizing", include_in_schema=_DEBUG)
-async def cost_rightsizing(req: CostExplorerRequest, user_info: dict = Depends(_verify_token)):
-    """Get EC2 rightsizing recommendations from Cost Explorer."""
-    import cost_explorer as _ce
-    recs = await asyncio.get_running_loop().run_in_executor(
-        None,
-        lambda: _ce.get_rightsizing_recommendations(
-            access_key=req.aws_access_key_id or "",
-            secret_key=req.aws_secret_access_key or "",
-            session_token=req.aws_session_token or "",
-        ),
-    )
-    return {"recommendations": recs}
-
-
-# ─── export endpoints ──────────────────────────────────────────────
-
-@app.get("/api/export/{analysis_id}/csv")
-async def export_analysis_csv(analysis_id: str, user_info: dict = Depends(_verify_token)):
-    """Export analysis report as CSV file."""
-    analysis = await db.get_analysis_by_id(analysis_id, user_info["user_id"])
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-
-    csv_content = _export_utils.export_analysis_csv(analysis)
-    filename = f"cost-report-{analysis_id[:8]}.csv"
-
-    return StreamingResponse(
-        io.StringIO(csv_content),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.get("/api/export/history/csv")
-async def export_history_csv(user_info: dict = Depends(_verify_token)):
-    """Export all analysis history as CSV."""
-    analyses = await db.get_analyses_by_user(user_info["user_id"], limit=500)
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow(["ID", "Cloud", "Regions", "Services", "Resources", "Issues",
-                      "Savings", "Status", "Date"])
-    for a in analyses:
-        writer.writerow([
-            a.get("id", ""),
-            a.get("cloud_provider", ""),
-            ", ".join(a.get("regions", [])),
-            ", ".join(a.get("services", [])),
-            a.get("resources_scanned", 0),
-            a.get("issues_found", 0),
-            a.get("estimated_savings", ""),
-            a.get("status", ""),
-            a.get("created_at", ""),
-        ])
-
-    return StreamingResponse(
-        io.StringIO(output.getvalue()),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="cost-detective-history.csv"'},
-    )
 
 
 # ─── health check ────────────────────────────────────────────────────────────
@@ -1537,62 +947,7 @@ async def health():
     return {"status": "ok", "db": db_status, "redis": redis_status}
 
 
-# ─── Free Tier endpoints ─────────────────────────────────────────────────────
 
-@app.get("/api/free-tier")
-async def get_free_tier(provider: str = Query("all", pattern="^(all|aws|azure|gcp)$")):
-    """Get free tier information for cloud providers."""
-    if not _FREE_TIER_AVAILABLE:
-        return {"error": "Free tier module not available"}
-    return _free_tier.get_free_tier(provider)
-
-
-@app.get("/api/free-tier/summary")
-async def get_free_tier_summary(provider: str = Query("all", pattern="^(all|aws|azure|gcp)$")):
-    """Get a flat summary of all free tier services."""
-    if not _FREE_TIER_AVAILABLE:
-        return {"error": "Free tier module not available"}
-    return {"services": _free_tier.get_free_tier_summary(provider)}
-
-
-@app.get("/api/free-tier/check")
-async def check_free_tier_eligibility(
-    provider: str = Query("aws", pattern="^(aws|azure|gcp)$"),
-    resources: str = Query("[]", description="JSON array of resource types"),
-):
-    """Check free tier eligibility for scanned resources."""
-    if not _FREE_TIER_AVAILABLE:
-        return {"error": "Free tier module not available"}
-    try:
-        resource_list = _json.loads(resources)
-        return _free_tier.check_free_tier_eligibility(provider, resource_list)
-    except _json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid resources JSON")
-
-
-@app.get("/api/free-tier/usage/{provider}")
-async def get_free_tier_usage(provider: str, user_info: dict = Depends(_verify_token)):
-    """Get real-time free tier usage based on last scan results."""
-    try:
-        import free_tier_usage as _ft_usage
-    except ImportError:
-        return {"error": "Free tier usage module not available"}
-
-    # Get the user's most recent scan
-    analyses = await db.get_analyses_by_user(user_info["user_id"], limit=1)
-    if not analyses:
-        return {"error": "No scan results found. Run a scan first."}
-
-    latest = analyses[0]
-    result = latest.get("analysis_result") or latest.get("resources_scanned", 0)
-
-    # Try to get resources from the analysis result
-    resources = {}
-    if isinstance(result, dict):
-        # Reconstruct resources from issues if available
-        resources = _reconstruct_resources_from_analysis(result, provider)
-
-    return _ft_usage.get_free_tier_usage(provider, resources)
 
 
 def _reconstruct_resources_from_analysis(analysis_result: dict, provider: str) -> dict:
@@ -1620,120 +975,22 @@ class IaCParseRequest(BaseModel):
     file_type: str = Field(default="terraform", pattern="^(terraform|cloudformation)$")
 
 
-@app.post("/api/infra/parse")
-async def parse_infrastructure(req: IaCParseRequest, user_info: dict = Depends(_verify_token)):
-    """Parse Terraform or CloudFormation and return infrastructure diagram."""
-    try:
-        import infra_visualizer as _infra_viz
-    except ImportError:
-        return {"error": "Infrastructure visualizer module not available"}
-
-    result = _infra_viz.analyze_iac(req.content, req.file_type)
-    return result
-
-
 class ScanProjectRequest(BaseModel):
     directory: str = Field(min_length=1, max_length=500)
     max_depth: int = Field(default=5, ge=1, le=10)
 
 
-@app.post("/api/infra/scan-project")
-async def scan_project_directory(req: ScanProjectRequest, user_info: dict = Depends(_verify_token)):
-    """Scan a local project directory for Terraform/CloudFormation files."""
-    try:
-        import infra_visualizer as _infra_viz
-    except ImportError:
-        return {"error": "Infrastructure visualizer module not available"}
-
-    import os
-    directory = os.path.expanduser(req.directory)
-
-    if not os.path.exists(directory):
-        return {"error": f"Directory not found: {directory}"}
-    if not os.path.isdir(directory):
-        return {"error": f"Not a directory: {directory}"}
-
-    result = _infra_viz.scan_project_directory(directory, req.max_depth)
-    return result
-
-
-@app.get("/api/infra/scan-git")
-async def scan_git_repo(
-    repo_url: str = Query(..., description="Git repository URL"),
-    user_info: dict = Depends(_verify_token),
-):
-    """Clone and scan a Git repository for IaC files."""
-    try:
-        import infra_visualizer as _infra_viz
-        import git
-    except ImportError:
-        return {"error": "Infrastructure visualizer module not available"}
-
-    import tempfile
-    import os
-
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo_path = os.path.join(tmpdir, "repo")
-            git.Repo.clone_from(repo_url, repo_path, depth=1)
-            result = _infra_viz.scan_project_directory(repo_path)
-            result['repo_url'] = repo_url
-            return result
-    except git.exc.GitCommandError as e:
-        return {"error": f"Failed to clone repository: {str(e)}"}
-    except Exception as e:
-        return {"error": f"Error scanning repository: {str(e)}"}
-
-
-@app.post("/api/infra/validate")
-async def validate_infrastructure(req: IaCParseRequest, user_info: dict = Depends(_verify_token)):
-    """Validate infrastructure configuration and return recommendations."""
-    try:
-        import infra_visualizer as _infra_viz
-    except ImportError:
-        return {"error": "Infrastructure visualizer module not available"}
-
-    result = _infra_viz.analyze_iac(req.content, req.file_type)
-
-    # Add validation recommendations
-    recommendations = []
-    for resource in result.get("raw_resources", {}).values():
-        rtype = resource.get("type", "")
-
-        # Check for security issues
-        if rtype in ["aws_security_group", "azurerm_network_security_group"]:
-            config = resource.get("config", {})
-            if any("0.0.0.0/0" in str(v) for v in config.values()):
-                recommendations.append({
-                    "type": "security",
-                    "severity": "high",
-                    "resource": resource.get("name", ""),
-                    "message": "Security group allows traffic from 0.0.0.0/0. Restrict to specific IPs.",
-                })
-
-        # Check for cost optimization
-        if rtype == "aws_instance":
-            config = resource.get("config", {})
-            itype = config.get("instance_type", "")
-            if itype.startswith("t2."):
-                recommendations.append({
-                    "type": "cost",
-                    "severity": "low",
-                    "resource": resource.get("name", ""),
-                    "message": f"Consider upgrading from {itype} to t3 for better price-performance.",
-                })
-
-        # Check for free tier eligibility
-        if resource.get("free_tier_eligible"):
-            recommendations.append({
-                "type": "free_tier",
-                "severity": "info",
-                "resource": resource.get("name", ""),
-                "message": f"Resource is free tier eligible.",
-            })
-
-    result["recommendations"] = recommendations
-    return result
+def _sanitize_git_url(url: str) -> str:
+    """Strip embedded credentials from a git URL and validate the domain."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.scheme not in ("http", "https", "git", "ssh"):
+        raise ValueError(f"Unsupported git URL scheme: {parsed.scheme}")
+    # Strip credentials
+    sanitized = parsed._replace(netloc=parsed.hostname or parsed.netloc)
+    if parsed.port:
+        sanitized = sanitized._replace(netloc=f"{sanitized.hostname}:{parsed.port}")
+    return urlunparse(sanitized._replace(params='', query='', fragment=''))
 
 
 # ─── AWS SSO endpoints ────────────────────────────────────────────────────────
@@ -1873,6 +1130,8 @@ async def sso_get_credentials(req: SSOCredentialsRequest, user_info: dict = Depe
 
 import iac_parser as _iac_parser
 import cost_estimator as _cost_estimator
+
+from cloudflare_ai import estimate_insights
 
 
 class EstimatePasteRequest(BaseModel):
@@ -2065,3 +1324,36 @@ async def estimate_supported_formats(_: dict = Depends(_verify_token)):
         "estimation_note": "Prices are approximate and based on on-demand US East pricing. "
                            "Actual costs may vary by region, discounts, and usage patterns.",
     }
+
+
+class EstimateInsightsRequest(BaseModel):
+    resources_found: int = 0
+    total_cost: float = 0.0
+    service_breakdown: dict = Field(default_factory=dict)
+
+
+@app.post("/api/estimate/insights", include_in_schema=_DEBUG)
+async def estimate_insights_endpoint(req: EstimateInsightsRequest, user_info: dict = Depends(_verify_token)):
+    insights = await estimate_insights(req.resources_found, req.total_cost, req.service_breakdown)
+    return {"insights": insights or "AI insights unavailable"}
+
+
+# ─── router includes ─────────────────────────────────────────────────────────
+
+from routers.auth import router as _auth_router
+from routers.scan import router as _scan_router
+from routers.cost import router as _cost_router
+from routers.infra import router as _infra_router
+from routers.config import router as _config_router
+from routers.export import router as _export_router
+from routers.free_tier import router as _free_tier_router
+from routers.agent import router as _agent_router
+
+app.include_router(_auth_router, prefix="")
+app.include_router(_scan_router, prefix="")
+app.include_router(_cost_router, prefix="")
+app.include_router(_infra_router, prefix="")
+app.include_router(_config_router, prefix="")
+app.include_router(_export_router, prefix="")
+app.include_router(_free_tier_router, prefix="")
+app.include_router(_agent_router, prefix="")

@@ -240,9 +240,9 @@ export default function CostReports() {
                   </h3>
                   <div className="flex items-end gap-1" style={{ height: 120, overflowX: 'auto', minWidth: '100%' }}>
                     {costData.daily_costs.map((day: CostExplorerDay, i: number) => (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-1 min-w-[24px]" title={`${day.date}: $${day.total.toFixed(2)}`}>
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1 min-w-[24px]" title={`${day.date}: $${day.total?.toFixed(2) || "0.00"}`}>
                         <div style={{
-                          width: '100%', height: `${(day.total / maxDailyCost) * 100}%`,
+                          width: '100%', height: `${((day.total || 0) / maxDailyCost) * 100}%`,
                           minHeight: 4, background: day.total > (costData.average_daily_cost || 0) * 1.2
                             ? '#ef4444' : 'var(--color-accent)',
                           borderRadius: '2px 2px 0 0', transition: 'height 0.3s ease',
@@ -274,7 +274,7 @@ export default function CostReports() {
                               {svc.percentage}%
                             </span>
                             <span className="font-semibold" style={{ width: 80, textAlign: 'right' }}>
-                              ${svc.total.toFixed(2)}
+                              ${svc.total?.toFixed(2) || "0.00"}
                             </span>
                           </div>
                         </div>
@@ -321,7 +321,7 @@ export default function CostReports() {
                             {key.replace('_', ' ')}
                           </p>
                           <p style={{ color: 'var(--color-accent)', fontSize: '1.1rem', fontWeight: 700, marginTop: 2 }}>
-                            ${(period as CostVariationPeriod).total_cost.toFixed(0)}
+                            ${(period as CostVariationPeriod).total_cost?.toFixed(0) || "0"}
                           </p>
                         </div>
                       ))}
@@ -361,7 +361,7 @@ export default function CostReports() {
                             <div key={j} className="flex items-center justify-between text-xs py-0.5">
                               <span className="truncate">{svc.name}</span>
                               <span style={{ color: 'var(--color-text-tertiary)' }}>
-                                ${svc.total.toFixed(0)} ({svc.percentage}%)
+                                ${svc.total?.toFixed(0) || "0"} ({svc.percentage}%)
                               </span>
                             </div>
                           ))}
@@ -420,7 +420,7 @@ export default function CostReports() {
                       {f.period.Start} – {f.period.End}
                     </p>
                     <p style={{ color: 'var(--color-accent)', fontSize: '1.4rem', fontWeight: 700, marginTop: 4 }}>
-                      ${f.mean.toFixed(2)}
+                      ${(f.mean || 0).toFixed(2)}
                     </p>
                   </div>
                 ))}
@@ -446,7 +446,7 @@ export default function CostReports() {
                           paddingTop: 6,
                         }}>
                           <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#fff' }}>
-                            ${f.mean.toFixed(0)}
+                            ${(f.mean || 0).toFixed(0)}
                           </span>
                         </div>
                         <span style={{ fontSize: '0.65rem', color: 'var(--color-text-tertiary)', textAlign: 'center' }}>
@@ -501,7 +501,7 @@ export default function CostReports() {
                   {rightsizing.length} Recommendation{rightsizing.length !== 1 ? 's' : ''}
                 </h3>
                 <span className="badge-high" style={{ fontSize: '0.65rem' }}>
-                  Save ${rightsizing.reduce((s, r) => s + r.estimated_monthly_savings, 0).toFixed(2)}/mo
+                  Save ${(rightsizing.reduce((s, r) => s + (r.estimated_monthly_savings || 0), 0)).toFixed(2)}/mo
                 </span>
               </div>
               {rightsizing.map((rec, i) => (
@@ -517,7 +517,7 @@ export default function CostReports() {
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       {rec.estimated_monthly_savings > 0 && (
                         <span className="badge-high" style={{ fontSize: '0.65rem' }}>
-                          -${rec.estimated_monthly_savings.toFixed(2)}/mo
+                          -${(rec.estimated_monthly_savings || 0).toFixed(2)}/mo
                         </span>
                       )}
                     </div>

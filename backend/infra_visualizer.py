@@ -177,7 +177,7 @@ CATEGORY_COLORS = {
 }
 
 
-def parse_terraform_hcl(content: str) -> Dict[str, List[Dict]]:
+def parse_terraform_hcl(content: str) -> Dict[str, InfraResource]:
     """Parse Terraform HCL content and extract resources."""
     resources = {}
     current_resource = None
@@ -196,8 +196,17 @@ def parse_terraform_hcl(content: str) -> Dict[str, List[Dict]]:
                 "type": resource_match.group(1),
                 "name": resource_match.group(2),
             }
-            current_block = []
-            brace_count = 1
+            # Extract content after the opening brace on the same line
+            after_brace = stripped[stripped.index('{') + 1:].strip().rstrip('}').strip()
+            current_block = [after_brace] if after_brace else []
+            # Count braces on this line (after the resource line opening)
+            brace_count = 1 + stripped.count('{') - 1 - stripped.count('}')
+            if brace_count <= 0:
+                # Single-line block like: resource "x" "y" { key = "val" }
+                _process_block(current_resource, current_block, resources)
+                current_resource = None
+                current_block = []
+                brace_count = 0
             continue
 
         if current_resource:
@@ -215,6 +224,11 @@ def parse_terraform_hcl(content: str) -> Dict[str, List[Dict]]:
         _process_block(current_resource, current_block, resources)
 
     return resources
+
+
+def parse_terraform_content(content: str) -> Dict[str, InfraResource]:
+    """Parse Terraform content and return dict of InfraResource objects."""
+    return parse_terraform_hcl(content)
 
 
 def _process_block(resource: dict, lines: list, resources: dict):
