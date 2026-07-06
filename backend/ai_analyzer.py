@@ -1,11 +1,9 @@
 """
 Multi-cloud cost analysis engine.
 
-AI path  — uses the first configured AI provider (Anthropic, OpenAI, Google Gemini,
-           AWS Bedrock, or any OpenAI-compatible provider such as Groq, Mistral,
-           DeepSeek, xAI, Cohere, Together, Perplexity, Azure OpenAI, Ollama).
-           Provider is auto-detected from environment API keys, or forced via
-           AI_PROVIDER. See _PROVIDER_REGISTRY and _DETECTION_ORDER below.
+AI path  — uses the first configured AI provider (Anthropic Claude or Cloudflare
+           Workers AI free tier). Provider is auto-detected from environment API
+           keys, or forced via AI_PROVIDER.
 
 Fallback — built-in rule-based engines require no API key and support all three
            cloud providers: rule_based_analyze (AWS), rule_based_analyze_azure,
@@ -1041,74 +1039,6 @@ def _rule_based_for_provider(resources: dict, cloud_provider: str = "aws") -> di
     return rule_based_analyze(resources)
 
 
-# OpenAI-compatible function-call tool definition (works for all OpenAI-compat providers)
-_OPENAI_TOOL = {
-    "type": "function",
-    "function": {
-        "name": ANALYSIS_TOOL["name"],
-        "description": ANALYSIS_TOOL["description"],
-        "parameters": ANALYSIS_TOOL["input_schema"],
-    },
-}
-
-# JSON schema string used when a provider doesn't support tool calling (prompt-based JSON)
-_JSON_SCHEMA_STR = json.dumps(ANALYSIS_TOOL["input_schema"], indent=2)
-
-
-# ─── OpenAI-compatible providers ──────────────────────────────────────────────
-# (env_key, default_model, base_url)  base_url=None → use provider's default
-_OPENAI_COMPAT: dict[str, tuple[str | None, str, str | None]] = {
-    "openai":      ("OPENAI_API_KEY",      "gpt-4o",                          None),
-    "groq":        ("GROQ_API_KEY",        "llama-3.3-70b-versatile",         "https://api.groq.com/openai/v1"),
-    "deepseek":    ("DEEPSEEK_API_KEY",    "deepseek-chat",                   "https://api.deepseek.com/v1"),
-    "xai":         ("XAI_API_KEY",         "grok-3",                          "https://api.x.ai/v1"),
-    "mistral":     ("MISTRAL_API_KEY",     "mistral-large-latest",            "https://api.mistral.ai/v1"),
-    "cohere":      ("COHERE_API_KEY",      "command-r-plus",                  "https://api.cohere.ai/compatibility/v1"),
-    "together":    ("TOGETHER_API_KEY",    "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "https://api.together.xyz/v1"),
-    "perplexity":  ("PERPLEXITY_API_KEY",  "sonar-pro",                       "https://api.perplexity.ai"),
-    "ollama":      (None,                  "llama3.2",                        None),  # key-less, base_url from env
-}
-
-
-def _openai_compat_analyze(resources: dict, provider: str, api_key: str) -> dict:
-    try:
-        import openai as _openai
-    except ImportError:
-        return _fallback(resources, f"openai package not installed — run: pip install openai")
-
-    env_key_name, default_model, default_base = _OPENAI_COMPAT[provider]
-    model = os.getenv("AI_MODEL", default_model)
-
-    if provider == "ollama":
-        base_url = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")) + "/v1"
-        client = _openai.OpenAI(api_key="ollama", base_url=base_url)
-    elif provider == "azure":
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
-        client = _openai.AzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=endpoint,
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-        )
-    else:
-        client = _openai.OpenAI(api_key=api_key, base_url=default_base)
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            tools=[_OPENAI_TOOL],
-            tool_choice={"type": "function", "function": {"name": ANALYSIS_TOOL["name"]}},
-            messages=[{"role": "user", "content": _build_prompt(resources)}],
-        )
-        tool_call = response.choices[0].message.tool_calls[0]
-        return _normalize(json.loads(tool_call.function.arguments))
-    except Exception as e:
-        err_str = str(e).lower()
-        if "authentication" in err_str or "api_key" in err_str or "401" in err_str:
-            raise RuntimeError(f"{provider} authentication failed: {e}")
-        logger.warning("ai.provider_failed", extra={"provider": provider, "error": str(e)})
-        return _fallback(resources, f"{provider} error ({type(e).__name__})")
-
-
 # ─── Anthropic (Claude) ───────────────────────────────────────────────────────
 
 def _anthropic_analyze(resources: dict, api_key: str) -> dict:
@@ -1137,91 +1067,21 @@ def _anthropic_analyze(resources: dict, api_key: str) -> dict:
             raise RuntimeError(f"Anthropic authentication failed: {e}")
         logger.warning("ai.provider_failed", extra={"provider": "anthropic", "error": str(e)})
         return _fallback(resources, f"Anthropic error ({type(e).__name__})")
-
     return rule_based_analyze(resources)
 
 
-# ─── Google Gemini ────────────────────────────────────────────────────────────
-
-def _google_analyze(resources: dict, api_key: str) -> dict:
-    try:
-        from google import genai
-        from google.genai import types as genai_types
-    except ImportError:
-        return _fallback(resources, "google-genai package not installed — run: pip install google-genai")
-
-    model_name = os.getenv("AI_MODEL", "gemini-2.0-flash")
-    client = genai.Client(api_key=api_key)
-
-    prompt = (
-        _build_prompt(resources)
-        + f"\n\nReturn ONLY a valid JSON object matching this exact schema (no markdown, no extra text):\n{_JSON_SCHEMA_STR}"
-    )
-
-    try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        return _normalize(json.loads(response.text))
-    except Exception as e:
-        err_str = str(e).lower()
-        if "api_key" in err_str or "401" in err_str or "permission" in err_str:
-            raise RuntimeError(f"Google AI authentication failed: {e}")
-        logger.warning("ai.provider_failed", extra={"provider": "google", "error": str(e)})
-        return _fallback(resources, f"Google AI error ({type(e).__name__})")
-
-
-# ─── AWS Bedrock ──────────────────────────────────────────────────────────────
-# Uses existing boto3 — no extra package needed.
-
-def _bedrock_analyze(resources: dict, api_key: str) -> dict:
-    import boto3
-    model_id = os.getenv("AI_MODEL", os.getenv("BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0"))
-    region = os.getenv("BEDROCK_REGION", os.getenv("AWS_REGION", "us-east-1"))
-
-    tool_spec = {
-        "toolSpec": {
-            "name": ANALYSIS_TOOL["name"],
-            "description": ANALYSIS_TOOL["description"],
-            "inputSchema": {"json": ANALYSIS_TOOL["input_schema"]},
-        }
-    }
-
-    try:
-        client = boto3.client("bedrock-runtime", region_name=region)
-        response = client.converse(
-            modelId=model_id,
-            messages=[{"role": "user", "content": [{"text": _build_prompt(resources)}]}],
-            toolConfig={"tools": [tool_spec], "toolChoice": {"tool": {"name": ANALYSIS_TOOL["name"]}}},
-        )
-        for block in response.get("output", {}).get("message", {}).get("content", []):
-            if block.get("toolUse", {}).get("name") == ANALYSIS_TOOL["name"]:
-                return _normalize(block["toolUse"]["input"])
-    except Exception as e:
-        err_str = str(e).lower()
-        if "credentials" in err_str or "access" in err_str or "authfailure" in err_str:
-            raise RuntimeError(f"Bedrock authentication failed: {e}")
-        logger.warning("ai.provider_failed", extra={"provider": "bedrock", "error": str(e)})
-        return _fallback(resources, f"Bedrock error ({type(e).__name__})")
-
-    return rule_based_analyze(resources)
-
-
-# ─── provider detection ───────────────────────────────────────────────────────
-
-# Full provider registry: name → (env_key, handler)
-# OpenAI-compat providers share _openai_compat_analyze via a lambda.
 # ─── Cloudflare Workers AI provider ─────────────────────────────────────────
 
 def _cloudflare_analyze(resources: dict, _api_key: str | None = None) -> dict:
-    """Analyze resources using Cloudflare Workers AI (free, no API key needed)."""
+    """Analyze resources using Cloudflare Workers AI (free, no API key needed).
+    Supports direct Cloudflare API call (no Worker deployment required).
+    """
     import httpx as _httpx
 
     worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "")
+    cf_account = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+    cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "")
+    has_cf_direct = bool(cf_account and cf_token)
 
     resource_lines = []
     for service, items in resources.items():
@@ -1253,50 +1113,280 @@ Output ONLY a JSON object with these fields:
 
 Respond with valid JSON only, no other text."""
 
-    try:
-        with _httpx.Client(timeout=120) as client:
-            resp = client.post(
-                f"{worker_url}/api/agent/complete",
-                json={"prompt": prompt, "system": "You are an AWS cost optimization expert. Output only valid JSON.", "max_tokens": 4096, "temperature": 0.15},
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            raw = body.get("response", "")
-            import re as _re
-            match = _re.search(r'\{[\s\S]*\}', raw)
-            if match:
-                result = json.loads(match.group())
-                return _normalize(result)
-            logger.warning("ai.cloudflare_no_json", extra={"raw_preview": raw[:200]})
-    except Exception as e:
-        logger.warning("ai.cloudflare_failed", extra={"error": str(e)})
+    if worker_url:
+        try:
+            with _httpx.Client(timeout=120) as client:
+                resp = client.post(
+                    f"{worker_url}/api/agent/complete",
+                    json={"prompt": prompt, "system": "You are an AWS cost optimization expert. Output only valid JSON.", "max_tokens": 4096, "temperature": 0.15},
+                )
+                resp.raise_for_status()
+                body = resp.json()
+                raw = body.get("response", "")
+                import re as _re
+                match = _re.search(r'\{[\s\S]*\}', raw)
+                if match:
+                    result = json.loads(match.group())
+                    return _normalize(result)
+                logger.warning("ai.cloudflare_no_json", extra={"raw_preview": raw[:200]})
+        except Exception as e:
+            logger.warning("ai.cloudflare_worker_failed", extra={"error": str(e)})
+
+    if has_cf_direct:
+        try:
+            model = os.getenv("CLOUDFLARE_AI_MODEL", "@cf/meta/llama-3.1-8b-instruct")
+            url = f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/ai/run/{model}"
+            headers = {"Authorization": f"Bearer {cf_token}", "Content-Type": "application/json"}
+            body = {
+                "messages": [
+                    {"role": "system", "content": "You are an AWS cost optimization expert. Output only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": 4096,
+                "temperature": 0.15,
+            }
+            with _httpx.Client(timeout=120) as client:
+                resp = client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("success"):
+                    raw = data.get("result", {}).get("response", "")
+                    import re as _re
+                    match = _re.search(r'\{[\s\S]*\}', raw)
+                    if match:
+                        result = json.loads(match.group())
+                        return _normalize(result)
+                    logger.warning("ai.cloudflare_direct_no_json", extra={"raw_preview": raw[:200]})
+                else:
+                    logger.warning("ai.cloudflare_direct_error", extra={"errors": data.get("errors", [])})
+        except Exception as e:
+            logger.warning("ai.cloudflare_direct_failed", extra={"error": str(e)})
 
     return _rule_based_for_provider(resources)
 
 
+# ─── Google Gemini ──────────────────────────────────────────────────────
+
+def _google_analyze(resources: dict, api_key: str) -> dict:
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        return _fallback(resources, "google-generativeai package not installed — run: pip install google-generativeai")
+
+    genai.configure(api_key=api_key)
+    model_name = os.getenv("AI_MODEL", "gemini-2.0-flash")
+
+    try:
+        model = genai.GenerativeModel(model_name)
+        prompt = _build_prompt(resources) + "\n\nReturn ONLY valid JSON matching the report_cost_analysis schema."
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        import re as _re
+        match = _re.search(r'\{[\s\S]*\}', text)
+        if match:
+            return _normalize(json.loads(match.group()))
+    except Exception as e:
+        err_str = str(e).lower()
+        if "api_key" in err_str or "401" in err_str or "permission" in err_str:
+            raise RuntimeError(f"Google AI authentication failed: {e}")
+        logger.warning("ai.google_failed", extra={"error": str(e)})
+        return _fallback(resources, f"Google AI error ({type(e).__name__})")
+    return _rule_based_for_provider(resources)
+
+
+# ─── OpenAI ─────────────────────────────────────────────────────────────
+
+def _openai_analyze(resources: dict, api_key: str) -> dict:
+    try:
+        import openai as _openai
+    except ImportError:
+        return _fallback(resources, "openai package not installed — run: pip install openai")
+
+    model = os.getenv("AI_MODEL", "gpt-4o")
+    client = _openai.OpenAI(api_key=api_key)
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are an expert AWS cost optimization engineer. Respond with valid JSON only."},
+                {"role": "user", "content": _build_prompt(resources)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=8192,
+            temperature=0.15,
+        )
+        text = response.choices[0].message.content
+        if text:
+            import re as _re
+            match = _re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return _normalize(json.loads(match.group()))
+    except Exception as e:
+        err_str = str(e).lower()
+        if "auth" in err_str or "401" in err_str or "api_key" in err_str:
+            raise RuntimeError(f"OpenAI authentication failed: {e}")
+        logger.warning("ai.openai_failed", extra={"error": str(e)})
+        return _fallback(resources, f"OpenAI error ({type(e).__name__})")
+    return _rule_based_for_provider(resources)
+
+
+# ─── OpenAI-compatible providers (Groq, DeepSeek, xAI, Mistral, Cohere, Together, Perplexity, Azure OpenAI) ──
+
+def _openai_compat_analyze(resources: dict, api_key: str, base_url: str, provider_name: str, default_model: str) -> dict:
+    try:
+        import openai as _openai
+    except ImportError:
+        return _fallback(resources, "openai package not installed — run: pip install openai")
+
+    model = os.getenv("AI_MODEL", default_model)
+    client = _openai.OpenAI(api_key=api_key, base_url=base_url)
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are an expert AWS cost optimization engineer. Respond with valid JSON only."},
+                {"role": "user", "content": _build_prompt(resources)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=8192,
+            temperature=0.15,
+        )
+        text = response.choices[0].message.content
+        if text:
+            import re as _re
+            match = _re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return _normalize(json.loads(match.group()))
+    except Exception as e:
+        logger.warning(f"ai.{provider_name}_failed", extra={"error": str(e)})
+        return _fallback(resources, f"{provider_name} error ({type(e).__name__})")
+    return _rule_based_for_provider(resources)
+
+
+def _groq_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.groq.com/openai/v1", "groq", "llama-3.3-70b-versatile")
+
+
+def _deepseek_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.deepseek.com/v1", "deepseek", "deepseek-chat")
+
+
+def _xai_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.x.ai/v1", "xai", "grok-2-1212")
+
+
+def _mistral_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.mistral.ai/v1", "mistral", "mistral-large-latest")
+
+
+def _cohere_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.cohere.ai/v1", "cohere", "command-r-plus")
+
+
+def _together_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.together.xyz/v1", "together", "mistralai/Mixtral-8x7B-Instruct-v0.1")
+
+
+def _perplexity_analyze(resources: dict, api_key: str) -> dict:
+    return _openai_compat_analyze(resources, api_key, "https://api.perplexity.ai", "perplexity", "sonar-pro")
+
+
+def _azure_openai_analyze(resources: dict, api_key: str) -> dict:
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    if not endpoint:
+        return _fallback(resources, "AZURE_OPENAI_ENDPOINT not set")
+    return _openai_compat_analyze(resources, api_key, f"{endpoint}/openai/deployments/{os.getenv('AI_MODEL', 'gpt-4o')}/chat/completions?api-version=2024-02-15-preview", "azure_openai", os.getenv("AI_MODEL", "gpt-4o"))
+
+
+# ─── Ollama (local) ─────────────────────────────────────────────────────
+
+def _ollama_analyze(resources: dict, _api_key: str | None = None) -> dict:
+    import httpx as _httpx
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    model = os.getenv("AI_MODEL", "llama3.2")
+
+    prompt = _build_prompt(resources)
+    try:
+        with _httpx.Client(timeout=300) as client:
+            resp = client.post(
+                f"{base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "You are an expert AWS cost optimization engineer. Output only valid JSON."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.15, "num_predict": 8192},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data.get("message", {}).get("content", "")
+            import re as _re
+            match = _re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return _normalize(json.loads(match.group()))
+    except Exception as e:
+        logger.warning("ai.ollama_failed", extra={"error": str(e)})
+        return _fallback(resources, f"Ollama error ({type(e).__name__})")
+    return _rule_based_for_provider(resources)
+
+
+# ─── AWS Bedrock ─────────────────────────────────────────────────────────
+
+def _bedrock_analyze(resources: dict, _api_key: str | None = None) -> dict:
+    try:
+        import boto3 as _boto3
+        import json as _json
+    except ImportError:
+        return _fallback(resources, "boto3 not installed — run: pip install boto3")
+
+    region = os.getenv("BEDROCK_REGION", "us-east-1")
+    model_id = os.getenv("AI_MODEL", "anthropic.claude-3-sonnet-20240229-v1:0")
+    prompt = _build_prompt(resources)
+
+    try:
+        client = _boto3.client("bedrock-runtime", region_name=region)
+        body = _json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 8192,
+            "messages": [{"role": "user", "content": prompt}],
+        })
+        resp = client.invoke_model(modelId=model_id, contentType="application/json", accept="application/json", body=body)
+        text = _json.loads(resp["body"].read()).get("content", [{}])[0].get("text", "")
+        import re as _re
+        match = _re.search(r'\{[\s\S]*\}', text)
+        if match:
+            return _normalize(_json.loads(match.group()))
+    except Exception as e:
+        logger.warning("ai.bedrock_failed", extra={"error": str(e)})
+        return _fallback(resources, f"Bedrock error ({type(e).__name__})")
+    return _rule_based_for_provider(resources)
+
+
 _PROVIDER_REGISTRY: dict[str, tuple[str | None, callable]] = {
-    # No-api-key providers first
-    "cloudflare": (None,                   _cloudflare_analyze),
-    # Native SDKs
-    "anthropic":  ("ANTHROPIC_API_KEY",    _anthropic_analyze),
-    "google":     ("GOOGLE_API_KEY",       _google_analyze),
-    "gemini":     ("GEMINI_API_KEY",       _google_analyze),
-    # AWS Bedrock — no API key (uses existing AWS credentials)
-    "bedrock":    (None,                   _bedrock_analyze),
-    # Azure OpenAI
-    "azure":      ("AZURE_OPENAI_API_KEY", lambda r, k: _openai_compat_analyze(r, "azure", k)),
-    # OpenAI-compatible (all use openai package)
-    **{name: (cfg[0], lambda r, k, n=name: _openai_compat_analyze(r, n, k))
-       for name, cfg in _OPENAI_COMPAT.items()},
+    "cloudflare":  (None,                       _cloudflare_analyze),
+    "anthropic":   ("ANTHROPIC_API_KEY",        _anthropic_analyze),
+    "google":      ("GOOGLE_API_KEY",           _google_analyze),
+    "gemini":      ("GEMINI_API_KEY",           _google_analyze),
+    "openai":      ("OPENAI_API_KEY",           _openai_analyze),
+    "groq":        ("GROQ_API_KEY",             _groq_analyze),
+    "deepseek":    ("DEEPSEEK_API_KEY",         _deepseek_analyze),
+    "xai":         ("XAI_API_KEY",              _xai_analyze),
+    "mistral":     ("MISTRAL_API_KEY",          _mistral_analyze),
+    "cohere":      ("COHERE_API_KEY",           _cohere_analyze),
+    "together":    ("TOGETHER_API_KEY",         _together_analyze),
+    "perplexity":  ("PERPLEXITY_API_KEY",       _perplexity_analyze),
+    "azure":       ("AZURE_OPENAI_API_KEY",     _azure_openai_analyze),
+    "bedrock":     (None,                       _bedrock_analyze),
+    "ollama":      (None,                       _ollama_analyze),
 }
 
-# Priority order when AI_PROVIDER is not set (cloudflare is free, checked first)
-_DETECTION_ORDER = [
-    "cloudflare",
-    "anthropic", "openai", "google", "gemini",
-    "groq", "deepseek", "xai", "mistral", "cohere",
-    "together", "perplexity", "azure", "bedrock", "ollama",
-]
+_DETECTION_ORDER = ["cloudflare", "google", "openai", "groq", "anthropic", "deepseek", "xai", "mistral", "cohere", "together", "perplexity", "azure", "bedrock", "ollama"]
 
 
 def _get_provider() -> tuple[str, str | None]:
@@ -1314,19 +1404,11 @@ def _get_provider() -> tuple[str, str | None]:
             return "none", None
         return explicit, api_key
 
-    # Auto-detect: check key-less providers first (cloudflare is free, no key needed)
+    # Auto-detect: Cloudflare is always available (free, no key needed)
     for name in _DETECTION_ORDER:
         env_key, _ = _PROVIDER_REGISTRY[name]
         if env_key is None:
-            # Key-less provider (cloudflare, bedrock, ollama) — use if available
-            if name == "cloudflare":
-                worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "").strip()
-                if not worker_url:
-                    # Default worker URL exists, Cloudflare is always available
-                    return name, None
-                return name, None
-            # bedrock, ollama — only used when explicitly set
-            continue
+            return name, None
         api_key = os.getenv(env_key, "").strip()
         if api_key:
             return name, api_key
@@ -1341,31 +1423,19 @@ def analyze_resources(resources: dict, cloud_provider: str = "aws", ai_provider:
     Route to the configured AI provider, or fall back to the built-in rule engine.
     cloud_provider: "aws" | "azure" | "gcp" — selects the correct rule engine fallback.
 
-    Set ONE of these env vars (first found is used, or set AI_PROVIDER to force one):
+    Set AI_PROVIDER to force a specific provider, or let auto-detection pick one:
 
-      ANTHROPIC_API_KEY   → Claude        pip install anthropic          (already installed)
-      OPENAI_API_KEY      → GPT-4o        pip install openai
-      GOOGLE_API_KEY      → Gemini        pip install google-generativeai
-      GEMINI_API_KEY      → Gemini        (alternative to GOOGLE_API_KEY)
-      GROQ_API_KEY        → Llama/Groq    pip install openai
-      DEEPSEEK_API_KEY    → DeepSeek      pip install openai
-      XAI_API_KEY         → Grok          pip install openai
-      MISTRAL_API_KEY     → Mistral       pip install openai
-      COHERE_API_KEY      → Command R+    pip install openai
-      TOGETHER_API_KEY    → Llama/Together pip install openai
-      PERPLEXITY_API_KEY  → Sonar         pip install openai
-      AZURE_OPENAI_API_KEY → Azure GPT    pip install openai  (+AZURE_OPENAI_ENDPOINT)
-      AI_PROVIDER=bedrock → AWS Bedrock   no extra package (uses existing boto3)
-      AI_PROVIDER=ollama  → Ollama local  pip install openai  (+OLLAMA_BASE_URL optional)
+      (default)   → Cloudflare Workers AI   (free, no API key needed)
+      ANTHROPIC_API_KEY → Anthropic Claude  pip install anthropic  (already installed)
 
     Optional overrides:
-      AI_PROVIDER=groq        force a specific provider
-      AI_MODEL=llama3.2       override the default model for the chosen provider
+      AI_PROVIDER=anthropic   force Anthropic
+      AI_MODEL=claude-sonnet-4-6  override the default model
     """
     # If a provider + key were supplied explicitly (from the UI), use them directly
     if ai_provider and ai_provider in _PROVIDER_REGISTRY:
         _, handler = _PROVIDER_REGISTRY[ai_provider]
-        # Key-less providers (bedrock, ollama) don't need an api_key
+        # Cloudflare is key-less, Anthropic needs ANTHROPIC_API_KEY
         needs_key = _PROVIDER_REGISTRY[ai_provider][0] is not None
         if needs_key and not ai_api_key:
             logger.warning("ai.no_key_supplied", extra={"provider": ai_provider})

@@ -45,6 +45,31 @@ async def signup(req: AuthRequest, request: Request, response: Response):
         httponly=True, samesite="strict", secure=_COOKIE_SECURE,
         max_age=JWT_EXPIRY_HOURS * 3600,
     )
+
+    # Send welcome email
+    try:
+        from notifications import send_email
+        await send_email(
+            to=req.email,
+            subject="Welcome to Cloud Cost Detective!",
+            body_text=f"Welcome to Cloud Cost Detective!\n\n"
+                      f"Your account has been created successfully. You can now scan your AWS, Azure, and GCP accounts "
+                      f"to detect cost-saving opportunities.\n\n"
+                      f"Get started: {request.base_url}\n\n"
+                      f"Pro tip: Configure your AI provider (Google Gemini, Claude, GPT-4o) in the Settings panel "
+                      f"for AI-powered cost analysis.\n\n"
+                      f"Happy cost hunting!\n"
+                      f"The Cost Detective Team",
+            body_html=f"<h2>Welcome to Cloud Cost Detective!</h2>"
+                      f"<p>Your account has been created successfully. You can now scan your AWS, Azure, and GCP "
+                      f"accounts to detect cost-saving opportunities.</p>"
+                      f"<p><a href=\"{request.base_url}\" style=\"display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;text-decoration:none;border-radius:8px;\">Get Started</a></p>"
+                      f"<p><strong>Pro tip:</strong> Configure your AI provider (Google Gemini, Claude, GPT-4o) "
+                      f"in the Settings panel for AI-powered cost analysis.</p>",
+        )
+    except Exception as e:
+        logger.warning("welcome_email.failed", extra={"error": str(e), "email": req.email})
+
     return {"user": {"id": user["id"], "email": user["email"]}}
 
 

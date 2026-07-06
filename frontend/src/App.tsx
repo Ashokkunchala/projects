@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './AuthContext'
 import { ThemeProvider } from './ThemeContext'
+import { AIProviderProvider } from './AIProviderContext'
 import Navbar from './components/Navbar'
 import Analyze from './pages/Analyze'
 import ChangePassword from './pages/ChangePassword'
@@ -14,6 +15,9 @@ import Login from './pages/Login'
 import Report from './pages/Report'
 import Signup from './pages/Signup'
 import AIAgent from './pages/AIAgent'
+import Teams from './pages/Teams'
+import AlertConfig from './pages/AlertConfig'
+import Rightsizing from './pages/Rightsizing'
 import ChatWidget from './components/ChatWidget'
 import type { ReactNode } from 'react'
 
@@ -38,27 +42,32 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <div className="min-h-screen flex flex-col">
-        {user && <Navbar />}
-        <main className="flex-1">
-          <Routes>
-            <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
-            <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
-            <Route path="/" element={<Private><Dashboard /></Private>} />
-            <Route path="/estimate" element={<Private><Estimate /></Private>} />
-            <Route path="/cost-reports" element={<Private><CostReports /></Private>} />
-            <Route path="/free-tier" element={<Private><FreeTier /></Private>} />
-            <Route path="/infra-visualizer" element={<Private><InfraVisualizer /></Private>} />
-            <Route path="/ai-agent" element={<Navigate to="/infra-visualizer" replace />} />
-            <Route path="/analyze/:id" element={<Private><Analyze /></Private>} />
-            <Route path="/report/:id" element={<Private><Report /></Private>} />
-            <Route path="/history" element={<Private><History /></Private>} />
-            <Route path="/change-password" element={<Private><ChangePassword /></Private>} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
-        {user && <ChatWidget />}
-      </div>
+      <AIProviderProvider>
+        <div className="min-h-screen flex flex-col">
+          {user && <Navbar />}
+          <main className="flex-1">
+            <Routes>
+              <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+              <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
+              <Route path="/" element={<Private><Dashboard /></Private>} />
+              <Route path="/estimate" element={<Private><Estimate /></Private>} />
+              <Route path="/cost-reports" element={<Private><CostReports /></Private>} />
+              <Route path="/free-tier" element={<Private><FreeTier /></Private>} />
+              <Route path="/infra-visualizer" element={<Private><InfraVisualizer /></Private>} />
+              <Route path="/ai-agent" element={<Navigate to="/infra-visualizer" replace />} />
+              <Route path="/analyze/:id" element={<Private><Analyze /></Private>} />
+              <Route path="/report/:id" element={<Private><Report /></Private>} />
+              <Route path="/history" element={<Private><History /></Private>} />
+              <Route path="/change-password" element={<Private><ChangePassword /></Private>} />
+              <Route path="/teams" element={<Private><Teams /></Private>} />
+              <Route path="/alerts" element={<Private><AlertConfig /></Private>} />
+              <Route path="/rightsizing" element={<Private><Rightsizing /></Private>} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+          {user && <ChatWidget />}
+        </div>
+      </AIProviderProvider>
     </ThemeProvider>
   )
 }

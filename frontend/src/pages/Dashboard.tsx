@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Play, RefreshCw, Cloud, Key, Users, Building2, AlertTriangle, Plus, Trash2, Sparkles, Shield, TrendingDown, Lightbulb } from 'lucide-react'
+import { Play, RefreshCw, Cloud, Key, Users, Building2, AlertTriangle, Plus, Trash2, Sparkles, Shield, TrendingDown, Lightbulb, CheckCircle, XCircle, ExternalLink } from 'lucide-react'
 import { analysis, cloud, aws as awsApi, loadSSOCreds, clearSSOCreds, type SSOCredential } from '../api'
 import ServiceSelector from '../components/ServiceSelector'
 import SSOAuth from '../components/SSOAuth'
 import SuggestionPanel from '../components/SuggestionPanel'
 import type { AWSAccount, CloudProvider } from '../types'
+import { useAIProvider, AI_PROVIDER_META, ALL_PROVIDERS } from '../AIProviderContext'
 
 const PROVIDER_META: Record<CloudProvider, { label: string; color: string; bg: string; border: string }> = {
   aws:   { label: 'AWS',   color: '#FF9900', bg: 'rgba(255,153,0,0.18)',   border: 'rgba(255,153,0,0.75)' },
@@ -72,23 +73,29 @@ function savePrefs(prefs: Prefs) {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(safe)) } catch { /* ignore */ }
 }
 
-const AI_PROVIDERS = [
-  { value: '',           label: 'Auto-detect (server key)',  placeholder: '' },
-  { value: 'anthropic',  label: 'Claude (Anthropic)',        placeholder: 'sk-ant-api03-...' },
-  { value: 'openai',     label: 'GPT-4o (OpenAI)',           placeholder: 'sk-proj-...' },
-  { value: 'google',     label: 'Gemini (Google)',           placeholder: 'AIzaSy...' },
-  { value: 'groq',       label: 'Groq (Llama 3)',            placeholder: 'gsk_...' },
-  { value: 'deepseek',   label: 'DeepSeek',                  placeholder: 'sk-...' },
-  { value: 'xai',        label: 'Grok (xAI)',                placeholder: 'xai-...' },
-  { value: 'mistral',    label: 'Mistral',                   placeholder: 'api key...' },
-  { value: 'bedrock',    label: 'AWS Bedrock (no key)',       placeholder: '' },
-  { value: 'ollama',     label: 'Ollama (local)',             placeholder: '' },
+const AI_PROVIDERS: { value: string; label: string; placeholder: string; global: string; keyEnv: string }[] = [
+  { value: '',           label: 'Global — Auto (server-configured)',  placeholder: '', global: 'auto', keyEnv: '' },
+  { value: 'anthropic',  label: 'Claude (Anthropic)',                 placeholder: 'sk-ant-api03-...', global: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY' },
+  { value: 'google',     label: 'Google Gemini',                     placeholder: 'AIzaSy...', global: 'google', keyEnv: 'GOOGLE_API_KEY' },
+  { value: 'openai',     label: 'OpenAI GPT-4o',                     placeholder: 'sk-...', global: 'openai', keyEnv: 'OPENAI_API_KEY' },
+  { value: 'cloudflare', label: 'Cloudflare Workers AI',             placeholder: '', global: 'cloudflare', keyEnv: '' },
+  { value: 'groq',       label: 'Groq (Llama 3.3)',                  placeholder: 'gsk_...', global: 'groq', keyEnv: 'GROQ_API_KEY' },
+  { value: 'deepseek',   label: 'DeepSeek',                          placeholder: 'sk-...', global: 'deepseek', keyEnv: 'DEEPSEEK_API_KEY' },
+  { value: 'xai',        label: 'xAI Grok',                          placeholder: 'xai-...', global: 'xai', keyEnv: 'XAI_API_KEY' },
+  { value: 'mistral',    label: 'Mistral AI',                        placeholder: '...', global: 'mistral', keyEnv: 'MISTRAL_API_KEY' },
+  { value: 'cohere',     label: 'Cohere',                            placeholder: '...', global: 'cohere', keyEnv: 'COHERE_API_KEY' },
+  { value: 'together',   label: 'Together AI',                       placeholder: '...', global: 'together', keyEnv: 'TOGETHER_API_KEY' },
+  { value: 'perplexity', label: 'Perplexity',                        placeholder: 'pplx-...', global: 'perplexity', keyEnv: 'PERPLEXITY_API_KEY' },
+  { value: 'azure',      label: 'Azure OpenAI',                      placeholder: '...', global: 'azure', keyEnv: 'AZURE_OPENAI_API_KEY' },
+  { value: 'bedrock',    label: 'AWS Bedrock',                       placeholder: '', global: 'bedrock', keyEnv: '' },
+  { value: 'ollama',     label: 'Ollama (Local)',                    placeholder: '', global: 'ollama', keyEnv: '' },
 ]
 
 const ACCOUNT_ID_RE = /^\d{12}$/
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { provider: globalProvider, providersHealth, setProvidersHealth } = useAIProvider()
 
   const [prefs, setPrefs] = useState(loadPrefs)
   const {
@@ -96,8 +103,10 @@ export default function Dashboard() {
     awsAuthMode, awsAccessKeyId, awsSecretAccessKey, selectedOrgAccountIds,
     subscriptionId, azureTenantId, azureClientId, azureClientSecret,
     projectId, gcpApiKey,
-    aiProvider, aiApiKey,
+    aiProvider: localAiProvider, aiApiKey,
   } = prefs
+
+  const aiProvider = localAiProvider || (globalProvider === 'auto' ? '' : globalProvider)
 
   const updatePrefs = (patch: Partial<Prefs>) => {
     const next = { ...prefs, ...patch }
@@ -184,6 +193,13 @@ export default function Dashboard() {
   useEffect(() => {
     if (cloudProvider === 'aws' && awsAuthMode === 'organizations') loadOrgAccounts()
   }, [cloudProvider, awsAuthMode, loadOrgAccounts])
+
+  // Fetch AI provider health
+  useEffect(() => {
+    fetch('/api/health').then(r => r.json()).then(data => {
+      if (data?.ai?.providers) setProvidersHealth(data.ai.providers)
+    }).catch(() => {})
+  }, [setProvidersHealth])
 
   // Fetch AI suggestions from latest scan
   useEffect(() => {
@@ -757,60 +773,77 @@ export default function Dashboard() {
       {/* ── AI Engine ─────────────────────────────────────────────── */}
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ color: 'var(--color-text-tertiary)', flexShrink: 0 }}>
-            <path d="M12 2a5 5 0 0 1 5 5c0 1.5-.66 2.84-1.7 3.77L17 20H7l1.7-9.23A5 5 0 0 1 7 7a5 5 0 0 1 5-5z"
-              stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"/>
-            <circle cx="12" cy="7" r="1.5" fill="currentColor"/>
-          </svg>
+          <Sparkles size={14} style={{ color: '#a78bfa', flexShrink: 0 }} />
           <h2 className="font-medium text-white text-sm">AI Engine</h2>
-          <span className="text-xs ml-1" style={{ color: 'var(--color-text-tertiary)' }}>— powers the cost analysis</span>
+          <span className="text-xs ml-1" style={{ color: 'var(--color-text-tertiary)' }}>— choose your analysis provider</span>
         </div>
+
+        {/* Provider grid showing all available providers */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-4">
+          {ALL_PROVIDERS.map(p => {
+            const meta = AI_PROVIDER_META[p]
+            const isSelected = aiProvider === p || (aiProvider === '' && globalProvider === p)
+            const isActive = providersHealth[p]?.available
+            return (
+              <button key={p} onClick={() => updatePrefs({ aiProvider: p === globalProvider ? '' : p, aiApiKey: '' })}
+                className="relative flex flex-col items-center gap-1.5 p-2.5 rounded-xl text-xs transition-all"
+                style={{
+                  background: isSelected ? `${meta.color}18` : 'var(--color-section-bg)',
+                  border: `1.5px solid ${isSelected ? meta.color : 'var(--color-section-border)'}`,
+                  opacity: isSelected ? 1 : 0.7,
+                }}>
+                {isActive !== undefined && (
+                  <span className="absolute top-1 right-1">
+                    {isActive ? <CheckCircle size={8} style={{ color: '#22c55e' }} /> : <XCircle size={8} style={{ color: '#666' }} />}
+                  </span>
+                )}
+                <span className="text-xs font-medium text-white">{meta.label}</span>
+                <span className="text-[9px] opacity-50 text-center leading-tight">{meta.model}</span>
+                {meta.paid && <span className="text-[8px] px-1 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>API Key</span>}
+                {!meta.paid && <span className="text-[8px] px-1 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>Free</span>}
+              </button>
+            )
+          })}
+        </div>
+
         <div className="space-y-3">
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>Provider</label>
-            <div className="relative">
-              <select className="input w-full text-sm"
-                value={aiProvider}
-                onChange={(e) => updatePrefs({ aiProvider: e.target.value, aiApiKey: '' })}
-                style={{ appearance: 'none', paddingRight: '28px', background: 'var(--color-select-bg)', color: 'var(--color-select-text)' }}>
-                {AI_PROVIDERS.map((p) => (
-                  <option key={p.value} value={p.value} style={{ background: 'var(--color-select-bg)', color: 'var(--color-select-text)' }}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                style={{ color: 'var(--color-text-tertiary)' }}>
-                <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
+          <div className="flex items-center gap-2 mb-1">
+            <label className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>Per-scan override</label>
+            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>
+              Navbar: {AI_PROVIDER_META[aiProvider || globalProvider]?.label || 'Auto'}
+            </span>
           </div>
-          {aiProvider && aiProvider !== 'bedrock' && aiProvider !== 'ollama' && (
+          <div className="relative">
+            <select className="input w-full text-sm"
+              value={aiProvider}
+              onChange={(e) => updatePrefs({ aiProvider: e.target.value, aiApiKey: '' })}
+              style={{ appearance: 'none', paddingRight: '28px', background: 'var(--color-select-bg)', color: 'var(--color-select-text)' }}>
+              {AI_PROVIDERS.map((p) => (
+                <option key={p.value} value={p.value} style={{ background: 'var(--color-select-bg)', color: 'var(--color-select-text)' }}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+              style={{ color: 'var(--color-text-tertiary)' }}>
+              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            Set the global provider in the <strong>Navbar</strong>. This dropdown overrides per-scan. Your API key is never stored on the server.
+          </p>
+          {aiProvider && AI_PROVIDERS.find(p => p.value === aiProvider)?.keyEnv && (
             <div>
               <label className="block text-xs mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
                 API Key <span className="ml-1.5" style={{ color: 'var(--color-text-tertiary)' }}>(stored in browser only)</span>
               </label>
               <input type="password" className="input w-full text-sm font-mono"
-                placeholder={AI_PROVIDERS.find((p) => p.value === aiProvider)?.placeholder ?? 'API key...'}
+                placeholder={AI_PROVIDERS.find(p => p.value === aiProvider)?.placeholder || 'Paste your API key'}
                 value={aiApiKey}
                 onChange={(e) => updatePrefs({ aiApiKey: e.target.value })}
                 autoComplete="new-password" />
             </div>
-          )}
-          {!aiProvider && (
-            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-              Using server-configured key. Set <code style={{ color: '#a5b4fc' }}>ANTHROPIC_API_KEY</code>,{' '}
-              <code style={{ color: '#a5b4fc' }}>OPENAI_API_KEY</code>, or <code style={{ color: '#a5b4fc' }}>GOOGLE_API_KEY</code> in the server's <code style={{ color: '#a5b4fc' }}>.env</code>.
-            </p>
-          )}
-          {aiProvider === 'bedrock' && (
-            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>Uses your existing AWS credentials — no extra key needed.</p>
-          )}
-          {aiProvider === 'ollama' && (
-            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-              Connects to local Ollama. Set <code style={{ color: '#a5b4fc' }}>OLLAMA_BASE_URL</code> on the server if not default.
-            </p>
           )}
         </div>
       </div>

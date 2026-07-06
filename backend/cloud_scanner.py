@@ -17,43 +17,8 @@ logger = logging.getLogger(__name__)
 from botocore.exceptions import ClientError, NoCredentialsError
 
 from cloud_organizations import AccountCredentials
-
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  Shared helpers
-# ════════════════════════════════════════════════════════════════════════════════
-
-def _tag(resource: dict, key: str) -> str:
-    for t in resource.get("Tags", []):
-        if t.get("Key") == key:
-            return t.get("Value", "")
-    return ""
-
-def _tags(resource: dict) -> dict:
-    return {t["Key"]: t["Value"] for t in resource.get("Tags", [])}
-
-def _dt(value) -> str:
-    if value is None:
-        return ""
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
-
-def _age(dt_value) -> int:
-    if dt_value is None:
-        return 0
-    now = datetime.datetime.now(dt_value.tzinfo)
-    return (now - dt_value).days
-
-def _b(type_: str, id_: str, name: str, region: str, creds: AccountCredentials) -> dict:
-    return {
-        "type": type_,
-        "id": id_,
-        "name": name or id_,
-        "region": region,
-        "account_id": creds.account_id,
-        "account_name": creds.account_name,
-    }
+from scanners import tag as _tag, tags as _tags, dt as _dt, age as _age, base as _b
+from scanners.kubernetes import scan_kubernetes as _scan_kubernetes
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2285,7 +2250,7 @@ def scan_budgets(creds: AccountCredentials, target_regions: list) -> list:
 
 # All resource bucket keys — one per service type stored
 ALL_RESOURCE_KEYS = [
-    "ec2", "elb", "autoscaling", "ecs", "eks", "ecr", "app_runner",
+    "kubernetes", "ec2", "elb", "autoscaling", "ecs", "eks", "ecr", "app_runner",
     "elastic_beanstalk", "batch", "lightsail",
     "rds", "elasticache", "dynamodb", "dax", "redshift", "documentdb",
     "neptune", "timestream", "qldb", "keyspaces", "memorydb", "dms",
@@ -2316,6 +2281,7 @@ ALL_RESOURCE_KEYS = [
 # is_global=True: scanner takes (creds, target_regions) and runs once per account
 # is_global=False: scanner takes (creds, region) and runs once per region
 _DISPATCH: dict = {
+    "kubernetes":           [(_scan_kubernetes, "kubernetes", False)],
     "ec2":                  [(scan_ec2, "ec2", False), (scan_cloudwatch_logs, "cloudwatch_logs", False)],
     "elb":                  [(scan_elb, "elb", False)],
     "autoscaling":          [(scan_autoscaling, "autoscaling", False)],

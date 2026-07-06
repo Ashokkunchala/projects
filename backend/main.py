@@ -139,6 +139,15 @@ async def lifespan(app: FastAPI):
 
     # Run an immediate purge on startup, then every 12 hours
     asyncio.create_task(_history_purge_loop())
+
+    # Start anomaly detection background loop
+    try:
+        from anomaly_detector import anomaly_check_loop
+        asyncio.create_task(anomaly_check_loop())
+        logger.info("anomaly.check.started")
+    except Exception as e:
+        logger.warning("anomaly.check.not_started", extra={"error": str(e)})
+
     yield
     await _redis_client.close_redis()
     await db.close_pool()
@@ -371,6 +380,7 @@ AWS_REGIONS = [
 
 AWS_SERVICES = [
     # ── Compute ──────────────────────────────────────────────────────────────
+    {"id": "kubernetes",        "name": "Kubernetes (EKS)",              "description": "EKS clusters, node groups, and worker nodes"},
     {"id": "ec2",               "name": "EC2 / EBS / EIP / NAT",       "description": "Instances, volumes, snapshots, Elastic IPs, NAT gateways, CloudWatch Logs"},
     {"id": "elb",               "name": "Load Balancers",               "description": "ALB, NLB, and Classic load balancers"},
     {"id": "autoscaling",       "name": "Auto Scaling",                 "description": "Auto Scaling Groups"},
@@ -938,13 +948,72 @@ async def health():
     except Exception:
         redis_status = "unavailable"
 
+    cf_url = os.getenv("CLOUDFLARE_WORKER_URL", "")
+    cf_account = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+    cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "")
+    has_cf_direct = bool(cf_account and cf_token)
+    has_cloudflare = bool(cf_url) or has_cf_direct
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    has_google = bool(os.getenv("GOOGLE_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip())
+    has_openai = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+    has_deepseek = bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+    has_xai = bool(os.getenv("XAI_API_KEY", "").strip())
+    has_mistral = bool(os.getenv("MISTRAL_API_KEY", "").strip())
+    has_cohere = bool(os.getenv("COHERE_API_KEY", "").strip())
+    has_together = bool(os.getenv("TOGETHER_API_KEY", "").strip())
+    has_perplexity = bool(os.getenv("PERPLEXITY_API_KEY", "").strip())
+    has_azure = bool(os.getenv("AZURE_OPENAI_API_KEY", "").strip() and os.getenv("AZURE_OPENAI_ENDPOINT", "").strip())
+    has_bedrock = bool(os.getenv("BEDROCK_REGION", "").strip())
+    has_ollama = bool(os.getenv("OLLAMA_BASE_URL", "").strip())
+    ai_model = os.getenv("AI_MODEL", "llama-3.2-3b")
+    ai_provider = os.getenv("AI_PROVIDER", "auto").strip().lower()
+
+    active_provider = "none"
+    provider_priority = [
+        ("anthropic", has_anthropic), ("google", has_google), ("openai", has_openai),
+        ("groq", has_groq), ("deepseek", has_deepseek), ("xai", has_xai),
+        ("mistral", has_mistral), ("cohere", has_cohere), ("together", has_together),
+        ("perplexity", has_perplexity), ("azure", has_azure), ("bedrock", has_bedrock),
+        ("ollama", has_ollama), ("cloudflare", has_cloudflare),
+    ]
+    if ai_provider and ai_provider != "auto":
+        active_provider = ai_provider
+    else:
+        for name, available in provider_priority:
+            if available:
+                active_provider = name
+                break
+
+    ai_status = {
+        "provider": active_provider,
+        "model": ai_model,
+        "available": any(v for _, v in provider_priority),
+        "providers": {
+            "cloudflare": {"available": has_cloudflare, "url": cf_url or "", "direct_api": has_cf_direct, "model": "@cf/meta/llama-3.1-8b-instruct-fp8"},
+            "anthropic": {"available": has_anthropic, "model": os.getenv("AI_MODEL", "claude-sonnet-4-6")},
+            "google": {"available": has_google, "model": os.getenv("AI_MODEL", "gemini-2.0-flash")},
+            "openai": {"available": has_openai, "model": os.getenv("AI_MODEL", "gpt-4o")},
+            "groq": {"available": has_groq, "model": "llama-3.3-70b-versatile"},
+            "deepseek": {"available": has_deepseek, "model": "deepseek-chat"},
+            "xai": {"available": has_xai, "model": "grok-2-1212"},
+            "mistral": {"available": has_mistral, "model": "mistral-large-latest"},
+            "cohere": {"available": has_cohere, "model": "command-r-plus"},
+            "together": {"available": has_together, "model": "Mixtral-8x7B-Instruct-v0.1"},
+            "perplexity": {"available": has_perplexity, "model": "sonar-pro"},
+            "azure": {"available": has_azure, "model": os.getenv("AI_MODEL", "gpt-4o")},
+            "bedrock": {"available": has_bedrock, "model": os.getenv("AI_MODEL", "claude-3-sonnet")},
+            "ollama": {"available": has_ollama, "model": os.getenv("AI_MODEL", "llama3.2")},
+        },
+    }
+
     if db_status == "error":
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "db": db_status, "redis": redis_status},
+            content={"status": "degraded", "db": db_status, "redis": redis_status, "ai": ai_status},
         )
-    return {"status": "ok", "db": db_status, "redis": redis_status}
+    return {"status": "ok", "db": db_status, "redis": redis_status, "ai": ai_status}
 
 
 
@@ -1338,6 +1407,170 @@ async def estimate_insights_endpoint(req: EstimateInsightsRequest, user_info: di
     return {"insights": insights or "AI insights unavailable"}
 
 
+# ─── OAuth routes ────────────────────────────────────────────────────────────
+
+@app.get("/api/auth/google")
+async def google_login(request: Request):
+    """Redirect to Google OAuth."""
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    if not client_id:
+        raise HTTPException(status_code=501, detail="Google OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.")
+    redirect_uri = f"{request.base_url}api/auth/google/callback"
+    params = f"client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope=openid%20email%20profile&access_type=offline"
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(code: str, request: Request):
+    """Handle Google OAuth callback."""
+    import httpx as _httpx
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    redirect_uri = f"{request.base_url}api/auth/google/callback"
+
+    async with _httpx.AsyncClient() as client:
+        token_resp = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": redirect_uri, "grant_type": "authorization_code",
+        })
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+
+        user_resp = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"})
+        user_data = user_resp.json()
+
+    email = user_data.get("email", "")
+    name = user_data.get("name", email.split("@")[0])
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Could not get email from Google")
+
+    user = await db.get_user_by_email(email)
+    if not user:
+        import bcrypt as _bcrypt
+        pw_hash = _bcrypt.hashpw(os.urandom(32).hex().encode(), _bcrypt.gensalt()).decode()
+        user = await db.create_user(email, pw_hash)
+
+    token = _create_token(user["id"], user["email"])
+    from fastapi.responses import RedirectResponse
+    resp = RedirectResponse(url="/")
+    resp.set_cookie("token", token, httponly=True, samesite="strict", secure=_COOKIE_SECURE, max_age=JWT_EXPIRY_HOURS * 3600)
+    return resp
+
+
+@app.get("/api/auth/linkedin")
+async def linkedin_login(request: Request):
+    """Redirect to LinkedIn OAuth."""
+    client_id = os.getenv("LINKEDIN_OAUTH_CLIENT_ID", "")
+    if not client_id:
+        raise HTTPException(status_code=501, detail="LinkedIn OAuth not configured. Set LINKEDIN_OAUTH_CLIENT_ID and LINKEDIN_OAUTH_CLIENT_SECRET.")
+    redirect_uri = f"{request.base_url}api/auth/linkedin/callback"
+    params = f"response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=openid%20email%20profile"
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"https://www.linkedin.com/oauth/v2/authorization?{params}")
+
+
+@app.get("/api/auth/linkedin/callback")
+async def linkedin_callback(code: str, request: Request):
+    """Handle LinkedIn OAuth callback."""
+    import httpx as _httpx
+    client_id = os.getenv("LINKEDIN_OAUTH_CLIENT_ID", "")
+    client_secret = os.getenv("LINKEDIN_OAUTH_CLIENT_SECRET", "")
+    redirect_uri = f"{request.base_url}api/auth/linkedin/callback"
+
+    async with _httpx.AsyncClient() as client:
+        token_resp = await client.post("https://www.linkedin.com/oauth/v2/accessToken", data={
+            "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": redirect_uri, "grant_type": "authorization_code",
+        })
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+
+        user_resp = await client.get("https://api.linkedin.com/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"})
+        user_data = user_resp.json()
+
+    email = user_data.get("email", "")
+    name = user_data.get("name", email.split("@")[0] if email else "user")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Could not get email from LinkedIn")
+
+    user = await db.get_user_by_email(email)
+    if not user:
+        import bcrypt as _bcrypt
+        pw_hash = _bcrypt.hashpw(os.urandom(32).hex().encode(), _bcrypt.gensalt()).decode()
+        user = await db.create_user(email, pw_hash)
+
+    token = _create_token(user["id"], user["email"])
+    from fastapi.responses import RedirectResponse
+    resp = RedirectResponse(url="/")
+    resp.set_cookie("token", token, httponly=True, samesite="strict", secure=_COOKIE_SECURE, max_age=JWT_EXPIRY_HOURS * 3600)
+    return resp
+
+
+@app.get("/api/auth/github")
+async def github_login(request: Request):
+    """Redirect to GitHub OAuth."""
+    client_id = os.getenv("GITHUB_OAUTH_CLIENT_ID", "")
+    if not client_id:
+        raise HTTPException(status_code=501, detail="GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.")
+    redirect_uri = f"{request.base_url}api/auth/github/callback"
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&scope=user:email")
+
+
+@app.get("/api/auth/github/callback")
+async def github_callback(code: str, request: Request):
+    """Handle GitHub OAuth callback."""
+    import httpx as _httpx
+    client_id = os.getenv("GITHUB_OAUTH_CLIENT_ID", "")
+    client_secret = os.getenv("GITHUB_OAUTH_CLIENT_SECRET", "")
+    redirect_uri = f"{request.base_url}api/auth/github/callback"
+
+    async with _httpx.AsyncClient() as client:
+        token_resp = await client.post("https://github.com/login/oauth/access_token", data={
+            "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+        }, headers={"Accept": "application/json"})
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+
+        user_resp = await client.get("https://api.github.com/user",
+            headers={"Authorization": f"Bearer {access_token}"})
+        user_data = user_resp.json()
+
+        email_resp = await client.get("https://api.github.com/user/emails",
+            headers={"Authorization": f"Bearer {access_token}"})
+        emails = email_resp.json()
+
+    email = user_data.get("email", "")
+    if not email and isinstance(emails, list):
+        for e in emails:
+            if e.get("primary") and e.get("verified"):
+                email = e.get("email", "")
+                break
+        if not email and emails:
+            email = emails[0].get("email", "")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Could not get email from GitHub")
+
+    user = await db.get_user_by_email(email)
+    if not user:
+        import bcrypt as _bcrypt
+        pw_hash = _bcrypt.hashpw(os.urandom(32).hex().encode(), _bcrypt.gensalt()).decode()
+        user = await db.create_user(email, pw_hash)
+
+    token = _create_token(user["id"], user["email"])
+    from fastapi.responses import RedirectResponse
+    resp = RedirectResponse(url="/")
+    resp.set_cookie("token", token, httponly=True, samesite="strict", secure=_COOKIE_SECURE, max_age=JWT_EXPIRY_HOURS * 3600)
+    return resp
+
+
 # ─── router includes ─────────────────────────────────────────────────────────
 
 from routers.auth import router as _auth_router
@@ -1348,6 +1581,9 @@ from routers.config import router as _config_router
 from routers.export import router as _export_router
 from routers.free_tier import router as _free_tier_router
 from routers.agent import router as _agent_router
+from routers.teams import router as _teams_router
+from routers.alerts import router as _alerts_router
+from routers.rightsizing import router as _rightsizing_router
 
 app.include_router(_auth_router, prefix="")
 app.include_router(_scan_router, prefix="")
@@ -1357,3 +1593,6 @@ app.include_router(_config_router, prefix="")
 app.include_router(_export_router, prefix="")
 app.include_router(_free_tier_router, prefix="")
 app.include_router(_agent_router, prefix="")
+app.include_router(_teams_router, prefix="")
+app.include_router(_alerts_router)
+app.include_router(_rightsizing_router, prefix="")

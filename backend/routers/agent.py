@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1)
     context: ChatContext | None = None
     conversation_id: int | None = None
+    provider: str | None = Field(default=None, max_length=20)
     max_tokens: int = Field(default=2048, ge=100, le=4096)
     temperature: float = Field(default=0.3, ge=0.0, le=1.0)
 
@@ -90,11 +91,18 @@ async def agent_chat(req: ChatRequest, request: Request, user_info: dict = Depen
     messages = [m.model_dump() for m in req.messages]
     context = req.context.model_dump() if req.context else None
 
+    force_provider = None
+    if req.provider == "cloudflare":
+        force_provider = "cloudflare"
+    elif req.provider == "anthropic":
+        force_provider = "paid"
+
     response = await routed_chat(
         messages=messages,
         context=context,
         backend_user_id=user_id,
         conversation_id=req.conversation_id,
+        force_provider=force_provider,
     )
 
     if response is None:
@@ -275,15 +283,74 @@ async def agent_complete(req: dict, user_info: dict = Depends(_verify_token)):
 
 @router.get("/health")
 async def agent_health():
+    import os as _os
+    worker_url = _os.getenv("CLOUDFLARE_WORKER_URL", "")
+    cf_account = _os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+    cf_token = _os.getenv("CLOUDFLARE_API_TOKEN", "")
+    has_cf_direct = bool(cf_account and cf_token)
+    has_anthropic = bool(_os.getenv("ANTHROPIC_API_KEY", "").strip())
+    ai_model = _os.getenv("AI_MODEL", "llama-3.2-3b")
+
+    has_ai = has_cf_direct or has_anthropic or bool(worker_url)
+
+    if not worker_url and not has_cf_direct:
+        return {
+            "status": "configured" if has_anthropic else "unconfigured",
+            "environment": _os.getenv("PYTHON_ENV", "production"),
+            "model": ai_model,
+            "services": {
+                "ai": has_ai,
+                "database": True,
+                "cache": False,
+            },
+            "providers": {
+                "cloudflare": {"available": False, "reason": "CLOUDFLARE_WORKER_URL not set and no CLOUDFLARE_ACCOUNT_ID/API_TOKEN"},
+                "anthropic": {"available": has_anthropic, "reason": None if has_anthropic else "ANTHROPIC_API_KEY not set on server"},
+            },
+        }
+
+    if not worker_url and has_cf_direct:
+        return {
+            "status": "configured",
+            "environment": _os.getenv("PYTHON_ENV", "production"),
+            "model": ai_model,
+            "services": {
+                "ai": True,
+                "database": True,
+                "cache": False,
+            },
+            "providers": {
+                "cloudflare": {"available": True, "reason": None, "mode": "direct_api"},
+                "anthropic": {"available": has_anthropic, "reason": None if has_anthropic else "ANTHROPIC_API_KEY not set on server"},
+            },
+        }
+
     import httpx
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.get(f"{WORKER_URL}/api/agent/health")
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            if isinstance(data, dict):
+                data.setdefault("model", ai_model)
+                data.setdefault("services", {"ai": True, "database": True, "cache": False})
+                data["providers"] = {
+                    "cloudflare": {"available": True, "reason": None},
+                    "anthropic": {"available": has_anthropic, "reason": None if has_anthropic else "ANTHROPIC_API_KEY not set on server"},
+                }
+            return data
         except Exception as e:
-            logger.error(f"agent.health error: {e}")
-            raise HTTPException(502, "Worker health check failed")
+            logger.warning("agent.health.error", extra={"error": str(e)})
+            return {
+                "status": "worker_unreachable",
+                "environment": _os.getenv("PYTHON_ENV", "production"),
+                "model": ai_model,
+                "services": {"ai": False, "database": True, "cache": False},
+                "providers": {
+                    "cloudflare": {"available": False, "reason": f"Cannot reach Cloudflare Worker: {e}"},
+                    "anthropic": {"available": has_anthropic, "reason": None if has_anthropic else "ANTHROPIC_API_KEY not set on server"},
+                },
+            }
 
 
 # ─── Advanced Agent Capabilities (Phase 5) ─────────────────────────────────

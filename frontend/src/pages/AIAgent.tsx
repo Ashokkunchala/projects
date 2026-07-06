@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { agent, type AgentAnalysisRequest } from '../api'
 import { useNavigate } from 'react-router-dom'
-import { Code, GitBranch, Upload, File, X, CheckCircle, ArrowRight, Copy, ExternalLink } from 'lucide-react'
+import { useAIProvider, AI_PROVIDER_META, ALL_PROVIDERS } from '../AIProviderContext'
+import { Code, GitBranch, Upload, File, X, CheckCircle, ArrowRight, Copy, ExternalLink, RefreshCw, Wifi, WifiOff, Server, Key, Settings, Sparkles } from 'lucide-react'
 
 const FILE_TYPES = [
   { value: 'terraform', label: 'Terraform' },
@@ -85,7 +86,6 @@ function ResultPanel({ result }: { result: any }) {
   if (issues.length > 0 || resources.length > 0) {
     return (
       <div className="space-y-4">
-        {/* Summary cards */}
         <div className="grid grid-cols-3 gap-2">
           <div className="app-card p-3 text-center">
             <p className="text-2xl font-bold" style={{ color: '#6366f1' }}>{resources.length}</p>
@@ -107,7 +107,6 @@ function ResultPanel({ result }: { result: any }) {
           </div>
         )}
 
-        {/* Issues */}
         {issues.length > 0 && (
           <div className="app-card p-4">
             <h3 className="font-semibold mb-3 flex items-center gap-2">
@@ -156,7 +155,6 @@ function ResultPanel({ result }: { result: any }) {
           </div>
         )}
 
-        {/* Resources */}
         {resources.length > 0 && (
           <div className="app-card p-4">
             <h3 className="font-semibold mb-3">Resources ({resources.length})</h3>
@@ -171,7 +169,6 @@ function ResultPanel({ result }: { result: any }) {
           </div>
         )}
 
-        {/* Connections */}
         {connections.length > 0 && (
           <div className="app-card p-4">
             <h3 className="font-semibold mb-3">Connections ({connections.length})</h3>
@@ -188,7 +185,6 @@ function ResultPanel({ result }: { result: any }) {
           </div>
         )}
 
-        {/* Suggestions */}
         {suggestions.length > 0 && (
           <div className="app-card p-4">
             <h3 className="font-semibold mb-3">Suggestions ({suggestions.length})</h3>
@@ -224,6 +220,8 @@ export default function AIAgent() {
   const [loading, setLoading] = useState(false)
   const [showHealth, setShowHealth] = useState(false)
   const [health, setHealth] = useState<any>(null)
+  const [providerHealth, setProviderHealth] = useState<any>(null)
+  const [checkingProviders, setCheckingProviders] = useState(false)
 
   // Repo state
   const [repoUrl, setRepoUrl] = useState('')
@@ -235,6 +233,29 @@ export default function AIAgent() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string; content: string }[]>([])
   const [uploadStatus, setUploadStatus] = useState('')
+
+  useEffect(() => {
+    checkProviders()
+  }, [])
+
+  const checkProviders = async () => {
+    setCheckingProviders(true)
+    try {
+      const resp = await fetch('/api/health')
+      const data = await resp.json()
+      setProviderHealth(data?.ai || null)
+    } catch { /* ignore */ }
+    try {
+      const h = await agent.health()
+      setHealth(h)
+    } catch { /* ignore */ }
+    setCheckingProviders(false)
+  }
+
+  const checkHealth = async () => {
+    try { const h = await agent.health(); setHealth(h); setShowHealth(true) }
+    catch (e: any) { setHealth({ error: e.message }); setShowHealth(true) }
+  }
 
   const handleSubmit = async () => {
     const codeToSend = inputMode === 'paste' ? content :
@@ -255,11 +276,6 @@ export default function AIAgent() {
       setResult(res)
     } catch (e: any) { setError(e.message || 'Request failed') }
     finally { setLoading(false) }
-  }
-
-  const checkHealth = async () => {
-    try { const h = await agent.health(); setHealth(h); setShowHealth(true) }
-    catch (e: any) { setHealth({ error: e.message }); setShowHealth(true) }
   }
 
   const handleCloneRepo = async () => {
@@ -307,24 +323,115 @@ export default function AIAgent() {
 
   const hasCode = inputMode === 'paste' ? content.trim() : inputMode === 'repo' ? repoFiles.length > 0 : uploadedFiles.length > 0
 
+  const activeProvider = providerHealth?.provider || 'none'
+  const providerMeta = AI_PROVIDER_META[activeProvider as keyof typeof AI_PROVIDER_META]
+  const providerLabel = providerMeta?.label || (activeProvider === 'none' ? 'None' : activeProvider)
+  const aiAvailable = providerHealth?.available || false
+  const modelName = providerHealth?.model || health?.model || 'llama-3.2-3b'
+  const providers = providerHealth?.providers || health?.providers || {}
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold">AI Agent</h1>
-          <p className="app-muted text-sm mt-1">Powered by Cloudflare Workers AI</p>
+          <p className="app-muted text-sm mt-1">Powered by AI — configure providers below</p>
         </div>
-        <button onClick={checkHealth} className="btn-ghost text-sm flex items-center gap-2 px-3 py-1.5 rounded-lg">
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: health?.services?.ai ? '#22c55e' : '#ef4444' }} />
-          Health
+        <button onClick={() => { checkHealth(); checkProviders() }} className="btn-ghost text-sm flex items-center gap-2 px-3 py-1.5 rounded-lg">
+          <RefreshCw size={13} />
+          Refresh
         </button>
+      </div>
+
+      {/* AI Provider Configuration Panel */}
+      <div className="app-card p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Settings size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+            <h2 className="font-semibold text-sm">AI Provider Configuration</h2>
+          </div>
+          <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--color-text-tertiary)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: aiAvailable ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
+            {aiAvailable ? `${providerLabel} online` : 'offline'}
+          </span>
+        </div>
+
+        {/* All provider cards in a grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 text-xs">
+          {ALL_PROVIDERS.map(p => {
+            const meta = AI_PROVIDER_META[p]
+            const hp = providers[p]
+            const available = hp?.available || false
+            const isActive = activeProvider === p
+            return (
+              <div key={p} className="rounded-lg p-2.5 transition-all"
+                style={{
+                  background: available ? 'rgba(16,185,129,0.06)' : '#0f0f11',
+                  border: `1px solid ${isActive ? meta.color : (available ? 'rgba(16,185,129,0.2)' : 'var(--color-section-border)')}`,
+                  order: isActive ? -1 : 0,
+                }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  {available
+                    ? <Wifi size={10} style={{ color: '#22c55e' }} />
+                    : <WifiOff size={10} style={{ color: '#666' }} />
+                  }
+                  <span className="font-medium text-white text-[11px]">{meta.label}</span>
+                  {isActive && (
+                    <span className="ml-auto text-[8px] px-1 rounded" style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}>Active</span>
+                  )}
+                </div>
+                <p className="text-[10px] opacity-60 truncate">{meta.model}</p>
+                <p className="text-[9px] mt-0.5" style={{ color: available ? '#22c55e' : 'var(--color-text-tertiary)' }}>
+                  {available ? 'Connected' : (hp?.reason || 'Not configured')}
+                </p>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Active Provider Summary */}
+        <div className="mt-3 rounded-lg p-3 flex items-center gap-3" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+          <Sparkles size={16} style={{ color: '#a78bfa' }} />
+          <div className="flex-1">
+            <span className="text-xs font-medium text-white">
+              {activeProvider !== 'none'
+                ? `${providerLabel} — ${modelName}`
+                : 'No AI provider configured — using built-in rule engine'}
+            </span>
+          </div>
+          <button onClick={() => { checkHealth(); checkProviders() }} className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1 rounded-lg">
+            <RefreshCw size={10} />
+            Refresh
+          </button>
+        </div>
+
+        {/* Env var setup instructions */}
+        <details className="mt-3">
+          <summary className="text-xs cursor-pointer" style={{ color: '#6366f1' }}>How to configure providers</summary>
+          <div className="mt-2 p-3 rounded-lg text-xs space-y-2" style={{ background: '#0f0f11' }}>
+            <p><strong>Cloudflare Workers AI (free):</strong></p>
+            <pre style={{ background: '#1a1a20', padding: '8px', borderRadius: 6 }}>CLOUDFLARE_WORKER_URL=https://your-worker.your-subdomain.workers.dev</pre>
+            <p><strong>Google Gemini:</strong> Get API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>aistudio.google.com</a></p>
+            <pre style={{ background: '#1a1a20', padding: '8px', borderRadius: 6 }}>GOOGLE_API_KEY=your-google-api-key</pre>
+            <p><strong>Anthropic Claude:</strong> Get key from <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>console.anthropic.com</a></p>
+            <pre style={{ background: '#1a1a20', padding: '8px', borderRadius: 6 }}>ANTHROPIC_API_KEY=your-anthropic-api-key</pre>
+            <p><strong>OpenAI GPT-4o:</strong> Get key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>platform.openai.com</a></p>
+            <pre style={{ background: '#1a1a20', padding: '8px', borderRadius: 6 }}>OPENAI_API_KEY=your-openai-api-key</pre>
+            <p><strong>Override default model:</strong></p>
+            <pre style={{ background: '#1a1a20', padding: '8px', borderRadius: 6 }}>AI_MODEL=your-preferred-model</pre>
+            <p className="mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
+              Restart the server after changing env vars. The Dashboard scan page also lets you pick a provider per-scan with your own API key.
+            </p>
+          </div>
+        </details>
       </div>
 
       {showHealth && health && (
         <div className="app-card p-3 mb-4 flex items-center gap-6 text-xs">
-          <span>Status: <span className={health.status === 'healthy' ? 'text-green-500' : 'text-red-500'}>{health.status || 'unknown'}</span></span>
+          <span>Worker: <span className={health.status === 'healthy' || health.status === 'configured' ? 'text-green-500' : 'text-red-500'}>{health.status || 'unknown'}</span></span>
           <span>AI: <span className={health.services?.ai ? 'text-green-500' : 'text-red-500'}>{health.services?.ai ? 'Available' : 'Down'}</span></span>
           <span>Model: <span className="text-gray-300">{health.model || 'llama-3.2-3b'}</span></span>
+          <button onClick={() => setShowHealth(false)} className="ml-auto" style={{ color: 'var(--color-text-tertiary)' }}><X size={12} /></button>
         </div>
       )}
 
@@ -442,7 +549,7 @@ export default function AIAgent() {
             <div className="text-center py-16" style={{ color: 'var(--color-text-tertiary)' }}>
               <p className="text-4xl mb-3">&#129302;</p>
               <p className="text-sm">Paste code, clone a repo, or upload files</p>
-              <p className="text-xs mt-1 opacity-60">Powered by Cloudflare Workers AI</p>
+              <p className="text-xs mt-1 opacity-60">Agent analyzes IaC for cost, security, and architecture issues</p>
             </div>
           )}
           {result && <ResultPanel result={result} />}

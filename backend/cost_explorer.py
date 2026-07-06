@@ -13,6 +13,17 @@ import boto3
 logger = logging.getLogger(__name__)
 
 
+def _get_ce_client(access_key: str = "", secret_key: str = "", session_token: str = "", region: str = "us-east-1"):
+    """Create a Cost Explorer client with the provided credentials."""
+    kwargs = {"region_name": region}
+    if access_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+    if session_token:
+        kwargs["aws_session_token"] = session_token
+    return boto3.client("ce", **kwargs)
+
+
 def get_cost_data(
     access_key: str = "",
     secret_key: str = "",
@@ -291,4 +302,65 @@ def get_rightsizing_recommendations(
 
     except Exception as e:
         logger.warning("rightsizing.error", extra={"error": str(e)})
+        return []
+
+
+def get_ri_recommendations(access_key: str = "", secret_key: str = "", session_token: str = "") -> list:
+    """Get AWS Reserved Instance purchase recommendations."""
+    try:
+        client = _get_ce_client(access_key, secret_key, session_token)
+        resp = client.get_reservation_purchase_recommendation(
+            Service="AmazonEC2",
+            LookbackPeriodInDays="LAST_30_DAYS",
+            TermInYears="ONE_YEAR",
+            PaymentOption="PARTIAL_UPFRONT",
+        )
+        recommendations = []
+        for rec in resp.get("Recommendations", []):
+            for detail in rec.get("RecommendationDetails", []):
+                recommendations.append({
+                    "service": "AmazonEC2",
+                    "account_id": detail.get("AccountId", ""),
+                    "current_instance_type": detail.get("InstanceDetails", {}).get("EC2InstanceDetails", {}).get("InstanceType", ""),
+                    "recommended_plan": f"{detail.get('RecommendedNumberOfInstancesToPurchase', 0)} instances",
+                    "upfront": "partial",
+                    "term": "1year",
+                    "estimated_annual_savings": float(detail.get("EstimatedMonthlySavings", 0) or 0) * 12,
+                    "estimated_monthly_savings": float(detail.get("EstimatedMonthlySavings", 0) or 0),
+                    "coverage": float(rec.get("EstimatedCoverage", {}).get("CoveragePercentage", 0) or 0),
+                    "explanation": f"Purchase {detail.get('RecommendedNumberOfInstancesToPurchase', 0)} reserved instances to save ${float(detail.get('EstimatedMonthlySavings', 0) or 0):.2f}/month",
+                })
+        return recommendations
+    except Exception as e:
+        logger.warning("ce.ri.error", extra={"error": str(e)})
+        return []
+
+
+def get_savings_plan_recommendations(access_key: str = "", secret_key: str = "", session_token: str = "") -> list:
+    """Get AWS Savings Plan recommendations."""
+    try:
+        client = _get_ce_client(access_key, secret_key, session_token)
+        resp = client.get_savings_plans_purchase_recommendation(
+            SavingsPlanType="COMPUTE",
+            LookbackPeriodInDays="LAST_30_DAYS",
+            TermInYears="ONE_YEAR",
+            PaymentOption="PARTIAL_UPFRONT",
+        )
+        recommendations = []
+        for rec in resp.get("SavingsPlansPurchaseRecommendation", {}).get("SavingsPlansPurchaseRecommendationDetails", []):
+            recommendations.append({
+                "service": "Compute Savings Plan",
+                "account_id": rec.get("AccountId", ""),
+                "current_instance_type": "mixed",
+                "recommended_plan": f"${float(rec.get('RecommendedCommitment', 0) or 0):.2f}/hr commitment",
+                "upfront": "partial",
+                "term": "1year",
+                "estimated_annual_savings": float(rec.get("EstimatedAnnualSavings", 0) or 0),
+                "estimated_monthly_savings": float(rec.get("EstimatedMonthlySavings", 0) or 0) if rec.get("EstimatedMonthlySavings") else float(rec.get("EstimatedOnDemandCost", 0) or 0) * 0.2,
+                "coverage": float(rec.get("SavingsPercentage", 0) or 0),
+                "explanation": f"Savings Plan with ${float(rec.get('RecommendedCommitment', 0) or 0):.2f}/hr commitment saves ~{float(rec.get('SavingsPercentage', 0) or 0):.0f}% vs On-Demand",
+            })
+        return recommendations
+    except Exception as e:
+        logger.warning("ce.savings_plan.error", extra={"error": str(e)})
         return []

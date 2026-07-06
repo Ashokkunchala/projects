@@ -119,6 +119,77 @@ async def create_tables():
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS revoked_tokens_exp_idx ON revoked_tokens(expires_at)
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS organizations (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS organization_members (
+                id SERIAL PRIMARY KEY,
+                organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
+                invited_by INTEGER REFERENCES users(id),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(organization_id, user_id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS invitations (
+                id SERIAL PRIMARY KEY,
+                organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'member',
+                token TEXT UNIQUE NOT NULL,
+                invited_by INTEGER REFERENCES users(id),
+                expires_at TIMESTAMPTZ NOT NULL,
+                accepted BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS orgs_owner_id_idx ON organizations(owner_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS org_members_org_id_idx ON organization_members(organization_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS org_members_user_id_idx ON organization_members(user_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS invitations_org_id_idx ON invitations(organization_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS invitations_token_idx ON invitations(token)
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_configs (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                email TEXT,
+                slack_webhook TEXT,
+                notify_on TEXT[] DEFAULT '{anomaly}',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                alert_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT,
+                severity TEXT DEFAULT 'medium',
+                channel TEXT,
+                sent_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
 
 
 # ── Scheduled Scans Table ─────────────────────────────────────────────────────
@@ -637,7 +708,16 @@ async def update_scheduled_scan_run_times(scan_id: int, last_run: datetime, next
             )
 
 
+_organizations_store: dict[int, dict] = {}
+_organization_members_store: dict[int, list] = {}
+_invitations_store: dict[str, dict] = {}
+_org_counter = 0
+_member_counter = 0
+
 _reset_tokens_store: dict[str, dict] = {}
+_alert_configs_store: dict[int, dict] = {}
+_alert_history_store: list[dict] = []
+_alert_history_counter = 0
 
 
 async def create_reset_token(user_id: int, token: str, expires_at) -> None:
@@ -679,3 +759,427 @@ async def get_valid_reset_token(token: str):
         # Mark as used
         v["used"] = True
         return {"user_id": v["user_id"], "expires_at": v["expires_at"]}
+
+
+# ── Organizations CRUD ──────────────────────────────────────────────────────────
+
+async def create_organization(name: str, owner_id: int) -> Optional[dict]:
+    global _org_counter
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO organizations (name, owner_id)
+                   VALUES ($1, $2) RETURNING *""",
+                name, owner_id,
+            )
+            if not row:
+                return None
+            org = dict(row)
+            # Auto-add owner as member with role 'owner'
+            await conn.execute(
+                """INSERT INTO organization_members (organization_id, user_id, role, invited_by)
+                   VALUES ($1, $2, 'owner', $2) ON CONFLICT DO NOTHING""",
+                org["id"], owner_id,
+            )
+            return org
+    async with _mem_lock:
+        _org_counter += 1
+        now = datetime.now(timezone.utc).isoformat()
+        org = {
+            "id": _org_counter,
+            "name": name,
+            "owner_id": owner_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _organizations_store[_org_counter] = org
+        _member_counter += 1
+        _organization_members_store.setdefault(_org_counter, []).append({
+            "id": _member_counter,
+            "organization_id": _org_counter,
+            "user_id": owner_id,
+            "role": "owner",
+            "invited_by": owner_id,
+            "created_at": now,
+        })
+        return org
+
+
+async def get_organizations_by_user(user_id: int) -> list:
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT DISTINCT o.* FROM organizations o
+                   LEFT JOIN organization_members m ON o.id = m.organization_id
+                   WHERE o.owner_id = $1 OR m.user_id = $1
+                   ORDER BY o.created_at DESC""",
+                user_id,
+            )
+            return [dict(r) for r in rows]
+    async with _mem_lock:
+        result = []
+        for org in _organizations_store.values():
+            if org["owner_id"] == user_id:
+                result.append(dict(org))
+            else:
+                members = _organization_members_store.get(org["id"], [])
+                if any(m["user_id"] == user_id for m in members):
+                    result.append(dict(org))
+        result.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+        return result
+
+
+async def get_organization_by_id(org_id: int) -> Optional[dict]:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM organizations WHERE id = $1", org_id)
+            return dict(row) if row else None
+    async with _mem_lock:
+        org = _organizations_store.get(org_id)
+        return dict(org) if org else None
+
+
+async def update_organization(org_id: int, name: str) -> Optional[dict]:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """UPDATE organizations SET name = $1, updated_at = NOW()
+                   WHERE id = $2 RETURNING *""",
+                name, org_id,
+            )
+            return dict(row) if row else None
+    async with _mem_lock:
+        org = _organizations_store.get(org_id)
+        if not org:
+            return None
+        org["name"] = name
+        org["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return dict(org)
+
+
+async def delete_organization(org_id: int) -> bool:
+    if pool:
+        async with pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM organizations WHERE id = $1", org_id)
+            return result == "DELETE 1"
+    async with _mem_lock:
+        if org_id in _organizations_store:
+            del _organizations_store[org_id]
+            _organization_members_store.pop(org_id, None)
+            # Remove associated invitations
+            keys = [k for k, v in _invitations_store.items() if v.get("organization_id") == org_id]
+            for k in keys:
+                del _invitations_store[k]
+            return True
+        return False
+
+
+async def add_organization_member(org_id: int, user_id: int, role: str, invited_by: int) -> Optional[dict]:
+    global _member_counter
+    if pool:
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """INSERT INTO organization_members (organization_id, user_id, role, invited_by)
+                       VALUES ($1, $2, $3, $4) RETURNING *""",
+                    org_id, user_id, role, invited_by,
+                )
+                return dict(row) if row else None
+            except asyncpg.UniqueViolationError:
+                return None
+    async with _mem_lock:
+        members = _organization_members_store.setdefault(org_id, [])
+        if any(m["user_id"] == user_id for m in members):
+            return None
+        _member_counter += 1
+        member = {
+            "id": _member_counter,
+            "organization_id": org_id,
+            "user_id": user_id,
+            "role": role,
+            "invited_by": invited_by,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        members.append(member)
+        return member
+
+
+async def get_organization_members(org_id: int) -> list:
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT m.id, m.organization_id, m.user_id, m.role, m.invited_by,
+                          m.created_at, u.email
+                   FROM organization_members m
+                   JOIN users u ON u.id = m.user_id
+                   WHERE m.organization_id = $1
+                   ORDER BY m.created_at ASC""",
+                org_id,
+            )
+            return [dict(r) for r in rows]
+    async with _mem_lock:
+        members = _organization_members_store.get(org_id, [])
+        result = []
+        for m in members:
+            entry = dict(m)
+            # Find user email in in-memory store
+            for user in _users_store.values():
+                if user["id"] == m["user_id"]:
+                    entry["email"] = user["email"]
+                    break
+            result.append(entry)
+        result.sort(key=lambda x: x.get("created_at", ""))
+        return result
+
+
+async def update_member_role(org_id: int, user_id: int, role: str) -> bool:
+    if pool:
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """UPDATE organization_members SET role = $1
+                   WHERE organization_id = $2 AND user_id = $3""",
+                role, org_id, user_id,
+            )
+            return result == "UPDATE 1"
+    async with _mem_lock:
+        members = _organization_members_store.get(org_id, [])
+        for m in members:
+            if m["user_id"] == user_id:
+                m["role"] = role
+                return True
+        return False
+
+
+async def remove_organization_member(org_id: int, user_id: int) -> bool:
+    if pool:
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """DELETE FROM organization_members
+                   WHERE organization_id = $1 AND user_id = $2""",
+                org_id, user_id,
+            )
+            return result == "DELETE 1"
+    async with _mem_lock:
+        members = _organization_members_store.get(org_id, [])
+        for i, m in enumerate(members):
+            if m["user_id"] == user_id:
+                members.pop(i)
+                return True
+        return False
+
+
+async def create_invitation(org_id: int, email: str, role: str, invited_by: int, token: str, expires_at) -> Optional[dict]:
+    if pool:
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """INSERT INTO invitations (organization_id, email, role, token, invited_by, expires_at)
+                       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *""",
+                    org_id, email, role, token, invited_by, expires_at,
+                )
+                return dict(row) if row else None
+            except asyncpg.UniqueViolationError:
+                return None
+    async with _mem_lock:
+        if token in _invitations_store:
+            return None
+        inv = {
+            "id": len(_invitations_store) + 1,
+            "organization_id": org_id,
+            "email": email,
+            "role": role,
+            "token": token,
+            "invited_by": invited_by,
+            "expires_at": expires_at if isinstance(expires_at, str) else expires_at.isoformat(),
+            "accepted": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _invitations_store[token] = inv
+        return inv
+
+
+async def get_invitation_by_token(token: str) -> Optional[dict]:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM invitations WHERE token = $1", token)
+            return dict(row) if row else None
+    async with _mem_lock:
+        inv = _invitations_store.get(token)
+        return dict(inv) if inv else None
+
+
+async def accept_invitation(token: str, user_id: int) -> bool:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM invitations WHERE token = $1 AND accepted = FALSE AND expires_at > NOW()",
+                token,
+            )
+            if not row:
+                return False
+            inv = dict(row)
+            # Add member
+            try:
+                await conn.execute(
+                    """INSERT INTO organization_members (organization_id, user_id, role, invited_by)
+                       VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING""",
+                    inv["organization_id"], user_id, inv["role"], inv["invited_by"],
+                )
+            except asyncpg.UniqueViolationError:
+                pass
+            await conn.execute(
+                "UPDATE invitations SET accepted = TRUE WHERE token = $1",
+                token,
+            )
+            return True
+    async with _mem_lock:
+        inv = _invitations_store.get(token)
+        if not inv or inv.get("accepted"):
+            return False
+        from datetime import datetime, timezone
+        exp = inv["expires_at"]
+        if isinstance(exp, str):
+            exp_dt = datetime.fromisoformat(exp)
+        else:
+            exp_dt = exp
+        if exp_dt <= datetime.now(timezone.utc):
+            return False
+        inv["accepted"] = True
+        await add_organization_member(inv["organization_id"], user_id, inv["role"], inv["invited_by"])
+        return True
+
+
+async def get_organization_invitations(org_id: int) -> list:
+    """Get all invitations for an organization."""
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, organization_id, email, role, token, invited_by,
+                          expires_at, accepted, created_at
+                   FROM invitations WHERE organization_id = $1
+                   ORDER BY created_at DESC""",
+                org_id,
+            )
+            return [dict(r) for r in rows]
+    async with _mem_lock:
+        result = []
+        for inv in _invitations_store.values():
+            if inv.get("organization_id") == org_id:
+                entry = dict(inv)
+                if isinstance(entry.get("expires_at"), datetime):
+                    entry["expires_at"] = entry["expires_at"].isoformat()
+                result.append(entry)
+        result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return result
+
+
+async def get_user_role_in_org(org_id: int, user_id: int) -> Optional[str]:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2",
+                org_id, user_id,
+            )
+            return row["role"] if row else None
+    async with _mem_lock:
+        members = _organization_members_store.get(org_id, [])
+        for m in members:
+            if m["user_id"] == user_id:
+                return m["role"]
+        return None
+
+
+# ── Alert Configs CRUD ──────────────────────────────────────────────────────────
+
+async def get_alert_config(user_id: int) -> Optional[dict]:
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT email, slack_webhook, notify_on FROM alert_configs WHERE user_id = $1",
+                user_id,
+            )
+            if not row:
+                return None
+            return {
+                "email": row["email"],
+                "slack_webhook": row["slack_webhook"],
+                "notify_on": row["notify_on"] or ["anomaly"],
+            }
+    async with _mem_lock:
+        config = _alert_configs_store.get(user_id)
+        return dict(config) if config else None
+
+
+async def set_alert_config(user_id: int, config: dict) -> dict:
+    email = config.get("email")
+    slack_webhook = config.get("slack_webhook")
+    notify_on = config.get("notify_on", ["anomaly"])
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO alert_configs (user_id, email, slack_webhook, notify_on)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (user_id)
+                   DO UPDATE SET email = $2, slack_webhook = $3, notify_on = $4, updated_at = NOW()
+                   RETURNING email, slack_webhook, notify_on""",
+                user_id, email, slack_webhook, notify_on,
+            )
+            return {
+                "email": row["email"],
+                "slack_webhook": row["slack_webhook"],
+                "notify_on": row["notify_on"] or ["anomaly"],
+            }
+    async with _mem_lock:
+        _alert_configs_store[user_id] = {
+            "email": email,
+            "slack_webhook": slack_webhook,
+            "notify_on": notify_on,
+        }
+        return dict(_alert_configs_store[user_id])
+
+
+async def add_alert_history(user_id: int, alert_type: str, title: str, message: Optional[str] = None,
+                            severity: str = "medium", channel: Optional[str] = None) -> None:
+    if pool:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO alert_history (user_id, alert_type, title, message, severity, channel)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                user_id, alert_type, title, message, severity, channel,
+            )
+        return
+    global _alert_history_counter
+    async with _mem_lock:
+        _alert_history_counter += 1
+        _alert_history_store.append({
+            "id": _alert_history_counter,
+            "user_id": user_id,
+            "alert_type": alert_type,
+            "title": title,
+            "message": message,
+            "severity": severity,
+            "channel": channel,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+async def get_alert_history(user_id: int, limit: int = 50) -> list:
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, alert_type, title, message, severity, channel, sent_at
+                   FROM alert_history WHERE user_id = $1
+                   ORDER BY sent_at DESC LIMIT $2""",
+                user_id, limit,
+            )
+            result = []
+            for r in rows:
+                d = dict(r)
+                if d.get("sent_at") and hasattr(d["sent_at"], "isoformat"):
+                    d["sent_at"] = d["sent_at"].isoformat()
+                result.append(d)
+            return result
+    async with _mem_lock:
+        items = [a for a in _alert_history_store if a.get("user_id") == user_id]
+        items.sort(key=lambda x: x.get("sent_at", ""), reverse=True)
+        return items[:limit]

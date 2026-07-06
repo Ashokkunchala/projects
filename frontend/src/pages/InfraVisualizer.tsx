@@ -460,8 +460,8 @@ export default function InfraVisualizer() {
           </div>
         )}
 
-        <button onClick={checkHealth} className="btn-ghost p-1 flex items-center gap-1 text-xs">
-          {health?.services?.ai ? <Wifi size={12} style={{ color: '#10b981' }} /> : <WifiOff size={12} style={{ color: '#ef4444' }} />}
+        <button onClick={checkHealth} className="btn-ghost p-1 flex items-center gap-1 text-xs" title={health?.providers ? `CF: ${health.providers.cloudflare?.available ? 'OK' : 'no'} | Anthropic: ${health.providers.anthropic?.available ? 'OK' : 'no'}` : 'Check health'}>
+          {health?.services?.ai ? <Wifi size={12} style={{ color: '#10b981' }} /> : health?.providers ? <WifiOff size={12} style={{ color: '#f59e0b' }} /> : <WifiOff size={12} style={{ color: '#ef4444' }} />}
         </button>
       </div>
 
@@ -469,9 +469,15 @@ export default function InfraVisualizer() {
 
       {showHealth && health && (
         <div className="flex items-center gap-6 px-3 py-1.5 text-xs shrink-0" style={{ background: 'var(--color-section-bg)' }}>
-          <span>Worker: <span className={health.status === 'healthy' ? 'text-green-500' : 'text-red-500'}>{health.status || 'unknown'}</span></span>
+          <span>Worker: <span className={health.status === 'healthy' || health.status === 'configured' ? 'text-green-500' : 'text-red-500'}>{health.status || 'unknown'}</span></span>
           <span>AI: <span className={health.services?.ai ? 'text-green-500' : 'text-red-500'}>{health.services?.ai ? 'Available' : 'Down'}</span></span>
           <span>Model: <span className="text-gray-300">{health.model || 'llama-3.2-3b'}</span></span>
+          {health.providers && (
+            <>
+              <span>CF: <span className={health.providers.cloudflare?.available ? 'text-green-500' : 'text-red-500'}>{health.providers.cloudflare?.available ? 'OK' : '—'}</span></span>
+              <span>Anthropic: <span className={health.providers.anthropic?.available ? 'text-green-500' : 'text-red-500'}>{health.providers.anthropic?.available ? 'OK' : '—'}</span></span>
+            </>
+          )}
           <button onClick={() => setShowHealth(false)} className="ml-auto" style={{ color: 'var(--color-text-tertiary)' }}><X size={12} /></button>
         </div>
       )}

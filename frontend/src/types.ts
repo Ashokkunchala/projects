@@ -92,3 +92,81 @@ export interface ConversationMessage {
   metadata?: string
   created_at: string
 }
+
+// ─── Teams / RBAC Types ───────────────────────────────────────────────────────
+
+export interface Organization {
+  id: number
+  name: string
+  owner_id: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Member {
+  id: number
+  organization_id: number
+  user_id: number
+  role: 'owner' | 'admin' | 'member' | 'viewer'
+  invited_by: number
+  created_at: string
+  email: string
+}
+
+export interface Invitation {
+  id: number
+  organization_id: number
+  email: string
+  role: string
+  token: string
+  invited_by: number
+  expires_at: string
+  accepted: boolean
+  created_at: string
+}
+
+// ─── Alert Types ─────────────────────────────────────────────────────────────
+
+export interface AlertConfig {
+  email: string | null
+  slack_webhook: string | null
+  notify_on: string[]
+}
+
+export interface AlertHistoryItem {
+  id: number
+  alert_type: string
+  title: string
+  message: string | null
+  severity: string
+  channel: string | null
+  sent_at: string
+}
+
+// ─── RI / Savings Plan Types ─────────────────────────────────────────────────
+
+export interface RIRecommendation {
+  service: string
+  account_id: string
+  current_instance_type: string
+  recommended_plan: string
+  upfront: string
+  term: string
+  estimated_annual_savings: number
+  estimated_monthly_savings: number
+  coverage: number
+  explanation: string
+}
+
+export interface SavingsPlanRecommendation {
+  service: string
+  account_id: string
+  current_instance_type: string
+  recommended_plan: string
+  upfront: string
+  term: string
+  estimated_annual_savings: number
+  estimated_monthly_savings: number
+  coverage: number
+  explanation: string
+}

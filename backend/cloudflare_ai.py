@@ -16,6 +16,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 WORKER_URL = os.getenv("CLOUDFLARE_WORKER_URL", "")
+CF_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+CF_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CF_DIRECT_API = bool(CF_ACCOUNT_ID and CF_API_TOKEN)  # direct API without a Worker
+CF_FREE_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 _TIMEOUT = 120.0
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [0.5, 1.0, 2.0]
@@ -42,7 +46,7 @@ def classify_query_complexity(query: str) -> str:
 
     Returns 'simple' for basic questions that can be handled by Cloudflare's free Llama 3.1 8B.
     Returns 'complex' for multi-step analysis, code generation, or compliance checks
-    that benefit from stronger paid models (Claude/GPT-4o).
+    that benefit from stronger paid models (Anthropic Claude).
     """
     query_lower = query.lower()
 
@@ -64,13 +68,52 @@ def classify_query_complexity(query: str) -> str:
     return "simple"
 
 
+_PROVIDER_CONFIG = [
+    ("google", "GOOGLE_API_KEY", "gemini-2.0-flash"),
+    ("openai", "OPENAI_API_KEY", "gpt-4o"),
+    ("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-6"),
+    ("groq", "GROQ_API_KEY", "llama-3.3-70b-versatile"),
+    ("deepseek", "DEEPSEEK_API_KEY", "deepseek-chat"),
+    ("xai", "XAI_API_KEY", "grok-2-1212"),
+    ("mistral", "MISTRAL_API_KEY", "mistral-large-latest"),
+    ("cohere", "COHERE_API_KEY", "command-r-plus"),
+    ("together", "TOGETHER_API_KEY", "mistralai/Mixtral-8x7B-Instruct-v0.1"),
+    ("perplexity", "PERPLEXITY_API_KEY", "sonar-pro"),
+    ("bedrock", None, None),
+    ("ollama", None, None),
+]
+
+
 def _has_paid_provider() -> bool:
     """Check if any paid AI provider is configured on the backend."""
-    paid_keys = [
-        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-        "GEMINI_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY",
-    ]
-    return any(os.getenv(k, "").strip() for k in paid_keys)
+    for name, env_key, _ in _PROVIDER_CONFIG:
+        if name == "bedrock":
+            if os.getenv("BEDROCK_REGION", "").strip():
+                return True
+            continue
+        if name == "ollama":
+            if os.getenv("OLLAMA_BASE_URL", "").strip():
+                return True
+            continue
+        if env_key and os.getenv(env_key, "").strip():
+            return True
+    return False
+
+
+def _get_best_provider() -> str | None:
+    """Return the name of the best configured paid provider, or None."""
+    for name, env_key, _ in _PROVIDER_CONFIG:
+        if name == "bedrock":
+            if os.getenv("BEDROCK_REGION", "").strip():
+                return name
+            continue
+        if name == "ollama":
+            if os.getenv("OLLAMA_BASE_URL", "").strip():
+                return name
+            continue
+        if env_key and os.getenv(env_key, "").strip():
+            return name
+    return None
 
 
 async def routed_chat(
@@ -83,10 +126,10 @@ async def routed_chat(
     """Route a chat request to the appropriate model based on query complexity.
 
     - Simple queries: Cloudflare Worker (free, Llama 3.1 8B)
-    - Complex queries + paid provider available: Claude/GPT-4o (better reasoning)
+    - Complex queries + any paid provider: use best available
     - Complex queries + no paid provider: Cloudflare Worker (still works, less optimal)
 
-    force_provider: 'cloudflare' or 'paid' to override auto-routing.
+    force_provider: 'cloudflare', 'paid', or specific provider name to override.
     """
     last_user_msg = ""
     for m in reversed(messages):
@@ -94,7 +137,9 @@ async def routed_chat(
             last_user_msg = m.get("content", "")
             break
 
-    if force_provider == "cloudflare":
+    if force_provider and force_provider not in ("cloudflare", "paid", "auto"):
+        provider = force_provider
+    elif force_provider == "cloudflare":
         provider = "cloudflare"
     elif force_provider == "paid":
         provider = "paid" if _has_paid_provider() else "cloudflare"
@@ -109,43 +154,156 @@ async def routed_chat(
 
     if provider == "paid":
         return await _paid_chat(messages, context)
+    elif provider != "cloudflare":
+        return await _paid_chat_provider(messages, context, provider)
     else:
         return await chat_completion(messages, context, backend_user_id, conversation_id)
 
 
 async def _paid_chat(messages: list[dict], context: dict | None = None) -> str | None:
-    """Route chat to the best available paid AI provider."""
-    # Try providers in order of quality
-    providers = [
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("OPENAI_API_KEY", "openai"),
-        ("GOOGLE_API_KEY", "google"),
-        ("GROQ_API_KEY", "groq"),
-        ("DEEPSEEK_API_KEY", "deepseek"),
-    ]
+    """Route chat to the best available paid provider, else fall back to Cloudflare."""
+    provider = _get_best_provider()
+    if provider:
+        result = await _paid_chat_provider(messages, context, provider)
+        if result is not None:
+            return result
+        logger.warning("ai.paid_fallback", extra={"provider": provider, "reason": "returned None, using cloudflare"})
 
-    for env_key, provider_name in providers:
-        api_key = os.getenv(env_key, "").strip()
-        if not api_key:
-            continue
-
-        try:
-            if provider_name == "anthropic":
-                return await _call_anthropic(messages, api_key, context)
-            elif provider_name == "openai":
-                return await _call_openai(messages, api_key, context)
-            elif provider_name == "google":
-                return await _call_google(messages, api_key, context)
-            # Groq and DeepSeek use OpenAI-compatible API
-            elif provider_name in ("groq", "deepseek"):
-                base_url = "https://api.groq.com/openai/v1" if provider_name == "groq" else "https://api.deepseek.com/v1"
-                return await _call_openai_compat(messages, api_key, context, base_url)
-        except Exception as e:
-            logger.warning("ai.paid_provider_failed", extra={"provider": provider_name, "error": str(e)})
-            continue
-
-    # Fallback to Cloudflare
     return await chat_completion(messages, context)
+
+
+async def _paid_chat_provider(messages: list[dict], context: dict | None = None, provider_name: str = "anthropic") -> str | None:
+    """Route chat to a specific paid provider by name."""
+    system_msg = _build_system_for_paid(context)
+    api_messages = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+
+    if provider_name == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if api_key:
+            return await _call_anthropic(messages, api_key, context)
+    elif provider_name == "google" or provider_name == "gemini":
+        api_key = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+        if api_key:
+            return await _call_google(api_messages, api_key, system_msg, context)
+    elif provider_name == "openai" or provider_name == "groq" or provider_name == "deepseek" or provider_name == "xai" or provider_name == "mistral" or provider_name == "cohere" or provider_name == "together" or provider_name == "perplexity":
+        api_key = os.getenv(f"{provider_name.upper()}_API_KEY", "").strip()
+        base_urls = {
+            "openai": "https://api.openai.com/v1",
+            "groq": "https://api.groq.com/openai/v1",
+            "deepseek": "https://api.deepseek.com/v1",
+            "xai": "https://api.x.ai/v1",
+            "mistral": "https://api.mistral.ai/v1",
+            "cohere": "https://api.cohere.ai/v1",
+            "together": "https://api.together.xyz/v1",
+            "perplexity": "https://api.perplexity.ai",
+        }
+        if api_key and provider_name in base_urls:
+            return await _call_openai_compat(api_messages, api_key, base_urls[provider_name], system_msg, provider_name)
+    elif provider_name == "azure":
+        api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+        if api_key and endpoint:
+            return await _call_openai_compat(api_messages, api_key, f"{endpoint}/openai/deployments/{os.getenv('AI_MODEL', 'gpt-4o')}/chat/completions?api-version=2024-02-15-preview", system_msg, "azure")
+    elif provider_name == "bedrock":
+        return await _call_bedrock(api_messages, system_msg)
+    elif provider_name == "ollama":
+        return await _call_ollama(api_messages, system_msg)
+
+    return None
+
+
+async def _call_google(messages: list[dict], api_key: str, system: str = "", context: dict | None = None) -> str | None:
+    """Call Google Gemini API."""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model_name = os.getenv("AI_MODEL", "gemini-2.0-flash")
+        model = genai.GenerativeModel(model_name)
+        user_content = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
+        prompt = f"{system}\n\n{user_content}" if system else user_content
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        logger.warning(f"google.call_failed", extra={"error": str(e)})
+        return None
+
+
+async def _call_openai_compat(messages: list[dict], api_key: str, base_url: str, system: str = "", provider: str = "openai") -> str | None:
+    """Call any OpenAI-compatible API."""
+    try:
+        import openai as _openai
+        model = os.getenv("AI_MODEL", _DEFAULT_MODELS.get(provider, "gpt-4o"))
+        client = _openai.OpenAI(api_key=api_key, base_url=base_url)
+        api_msgs = [{"role": "system", "content": system}] if system else []
+        api_msgs.extend(messages)
+        response = client.chat.completions.create(
+            model=model,
+            messages=api_msgs,
+            max_tokens=2048,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.warning(f"{provider}.call_failed", extra={"error": str(e)})
+        return None
+
+
+async def _call_bedrock(messages: list[dict], system: str = "") -> str | None:
+    """Call AWS Bedrock."""
+    try:
+        import boto3 as _boto3
+        import json as _json
+        region = os.getenv("BEDROCK_REGION", "us-east-1")
+        model_id = os.getenv("AI_MODEL", "anthropic.claude-3-sonnet-20240229-v1:0")
+        client = _boto3.client("bedrock-runtime", region_name=region)
+        user_content = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
+        prompt = f"{system}\n\n{user_content}" if system else user_content
+        body = _json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}],
+        })
+        resp = client.invoke_model(modelId=model_id, contentType="application/json", accept="application/json", body=body)
+        return _json.loads(resp["body"].read()).get("content", [{}])[0].get("text", "")
+    except Exception as e:
+        logger.warning("bedrock.call_failed", extra={"error": str(e)})
+        return None
+
+
+async def _call_ollama(messages: list[dict], system: str = "") -> str | None:
+    """Call local Ollama instance."""
+    try:
+        import httpx as _httpx
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        model = os.getenv("AI_MODEL", "llama3.2")
+        prompt = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        async with _httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(
+                f"{base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": full_prompt}],
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "")
+    except Exception as e:
+        logger.warning("ollama.call_failed", extra={"error": str(e)})
+        return None
+
+
+_DEFAULT_MODELS = {
+    "openai": "gpt-4o",
+    "groq": "llama-3.3-70b-versatile",
+    "deepseek": "deepseek-chat",
+    "xai": "grok-2-1212",
+    "mistral": "mistral-large-latest",
+    "cohere": "command-r-plus",
+    "together": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "perplexity": "sonar-pro",
+}
 
 
 async def _call_anthropic(messages: list[dict], api_key: str, context: dict | None = None) -> str | None:
@@ -172,73 +330,6 @@ async def _call_anthropic(messages: list[dict], api_key: str, context: dict | No
             return data.get("content", [{}])[0].get("text", "")
     except Exception as e:
         logger.warning("anthropic.call_failed", extra={"error": str(e)})
-        return None
-
-
-async def _call_openai(messages: list[dict], api_key: str, context: dict | None = None) -> str | None:
-    """Call OpenAI API."""
-    return await _call_openai_compat(messages, api_key, context, "https://api.openai.com/v1")
-
-
-async def _call_google(messages: list[dict], api_key: str, context: dict | None = None) -> str | None:
-    """Call Google Gemini API."""
-    system_msg = _build_system_for_paid(context)
-    contents = []
-    for m in messages:
-        if m["role"] == "system":
-            contents.append({"role": "user", "parts": [{"text": m["content"]}]})
-            contents.append({"role": "model", "parts": [{"text": "Understood."}]})
-        else:
-            role = "user" if m["role"] == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": m["content"]}]})
-
-    payload = {
-        "contents": contents,
-        "systemInstruction": {"parts": [{"text": system_msg}]},
-        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.3},
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-    except Exception as e:
-        logger.warning("google.call_failed", extra={"error": str(e)})
-        return None
-
-
-async def _call_openai_compat(messages: list[dict], api_key: str, context: dict | None = None, base_url: str = "https://api.openai.com/v1") -> str | None:
-    """Call OpenAI-compatible API (OpenAI, Groq, DeepSeek, etc.)."""
-    system_msg = _build_system_for_paid(context)
-    api_messages = [{"role": "system", "content": system_msg}]
-    for m in messages:
-        if m["role"] != "system":
-            api_messages.append({"role": m["role"], "content": m["content"]})
-
-    payload = {
-        "model": "gpt-4o",
-        "messages": api_messages,
-        "max_tokens": 2048,
-        "temperature": 0.3,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except Exception as e:
-        logger.warning("openai_compat.call_failed", extra={"base_url": base_url, "error": str(e)})
         return None
 
 
@@ -275,26 +366,64 @@ Response guidelines:
 
 # ─── Async HTTP helpers ─────────────────────────────────────────────────────
 
+async def _call_direct_api(
+    prompt: str,
+    system: str = "",
+    max_tokens: int = 2048,
+    temperature: float = 0.3,
+) -> str | None:
+    """Call Cloudflare Workers AI directly via REST API (no Worker needed)."""
+    if not CF_DIRECT_API:
+        return None
+    model = os.getenv("CLOUDFLARE_AI_MODEL", CF_FREE_MODEL)
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{model}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+    messages = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": prompt})
+    body = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+    for attempt in range(_MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("success"):
+                    result = data.get("result", {})
+                    return result.get("response", "")
+                logger.warning("cf_direct.api_not_success", extra={"errors": data.get("errors", [])})
+        except Exception as e:
+            if attempt < _MAX_RETRIES - 1:
+                await asyncio.sleep(_RETRY_DELAYS[attempt])
+            else:
+                logger.warning("cf_direct.call_failed", extra={"error": str(e)})
+    return None
+
+
 async def _call_worker(
     prompt: str,
     system: str = "",
     max_tokens: int = 2048,
     temperature: float = 0.3,
 ) -> str | None:
-    """Send a prompt to the Cloudflare Worker's complete endpoint with retry logic."""
-    payload = {"prompt": prompt, "system": system, "max_tokens": max_tokens, "temperature": temperature}
-    for attempt in range(_MAX_RETRIES):
-        try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                resp = await client.post(f"{WORKER_URL}/api/agent/complete", json=payload)
-                resp.raise_for_status()
-                return resp.json().get("response", "")
-        except Exception as e:
-            if attempt < _MAX_RETRIES - 1:
-                await asyncio.sleep(_RETRY_DELAYS[attempt])
-            else:
-                logger.warning("cf_ai.call_failed", extra={"error": str(e), "attempts": _MAX_RETRIES})
-    return None
+    """Send a prompt to the Cloudflare Worker's complete endpoint with retry logic.
+    Falls back to direct Cloudflare API if no Worker URL is configured but
+    Cloudflare API credentials are available.
+    """
+    if WORKER_URL:
+        payload = {"prompt": prompt, "system": system, "max_tokens": max_tokens, "temperature": temperature}
+        for attempt in range(_MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                    resp = await client.post(f"{WORKER_URL}/api/agent/complete", json=payload)
+                    resp.raise_for_status()
+                    return resp.json().get("response", "")
+            except Exception as e:
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                else:
+                    logger.warning("cf_ai.call_failed", extra={"error": str(e), "attempts": _MAX_RETRIES})
+        return None
+    return await _call_direct_api(prompt, system, max_tokens, temperature)
 
 
 async def _call_worker_json(
@@ -394,26 +523,33 @@ async def chat_completion(
 
     result = await _post_worker("/api/agent/chat", payload, backend_user_id)
 
-    # If /chat endpoint not found (old Worker), fall back to /complete
+    # If /chat endpoint not found (old Worker), fall back to /complete or direct API
     if result is None:
         prompt = f"{last_user_msg}"
         if conv_summary:
             prompt = f"Conversation so far:{conv_summary}\n\nUser's latest message: {last_user_msg}"
 
-        for attempt in range(_MAX_RETRIES):
-            try:
-                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                    resp = await client.post(
-                        f"{WORKER_URL}/api/agent/complete",
-                        json={"prompt": prompt, "system": system_msg or "You are the AI Cost Detective — an expert cloud infrastructure advisor. Be concise and actionable.", "max_tokens": max_tokens, "temperature": temperature},
-                    )
-                    resp.raise_for_status()
-                    return resp.json().get("response", "")
-            except Exception as e:
-                if attempt < _MAX_RETRIES - 1:
-                    await asyncio.sleep(_RETRY_DELAYS[attempt])
-                else:
-                    logger.warning("cf_ai.complete_fallback_failed", extra={"error": str(e)})
+        if WORKER_URL:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                        resp = await client.post(
+                            f"{WORKER_URL}/api/agent/complete",
+                            json={"prompt": prompt, "system": system_msg or "You are the AI Cost Detective — an expert cloud infrastructure advisor. Be concise and actionable.", "max_tokens": max_tokens, "temperature": temperature},
+                        )
+                        resp.raise_for_status()
+                        return resp.json().get("response", "")
+                except Exception as e:
+                    if attempt < _MAX_RETRIES - 1:
+                        await asyncio.sleep(_RETRY_DELAYS[attempt])
+                    else:
+                        logger.warning("cf_ai.complete_fallback_failed", extra={"error": str(e)})
+        elif CF_DIRECT_API:
+            return await _call_direct_api(
+                prompt,
+                system_msg or "You are the AI Cost Detective — an expert cloud infrastructure advisor. Be concise and actionable.",
+                max_tokens, temperature,
+            )
 
     return result.get("response") if result else None
 
@@ -426,42 +562,75 @@ async def chat_stream(
     max_tokens: int = 2048,
     temperature: float = 0.3,
 ):
-    """Stream chat responses from the Worker via SSE. Yields tokens as they arrive."""
-    payload = {
-        "messages": messages,
-        "context": context,
-        "backend_user_id": backend_user_id,
-        "stream": True,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    if conversation_id:
-        payload["conversation_id"] = conversation_id
+    """Stream chat responses from the Worker via SSE, or fall back to direct API."""
+    # Build prompt for fallback
+    last_user_msg = ""
+    conv_summary = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            last_user_msg = m.get("content", "")
+            break
+    for m in messages[-5:]:
+        role = "User" if m.get("role") == "user" else "Assistant"
+        conv_summary += f"\n{role}: {m.get('content', '')[:500]}"
 
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-    if backend_user_id:
-        headers["X-Backend-User-Id"] = str(backend_user_id)
+    system_msg = ""
+    if context:
+        if context.get("page") == "/report":
+            system_msg = "You are the AI Cost Detective assistant. The user is viewing a scan report."
+        elif context.get("analysis_result"):
+            result = context["analysis_result"]
+            system_msg = f"Scan context: {result.get('total_resources', 0)} resources, {result.get('issues_found', 0)} issues, ${result.get('estimated_monthly_savings', 0)}/month savings potential."
 
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            async with client.stream("POST", f"{WORKER_URL}/api/agent/chat", json=payload, headers=headers) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if "token" in chunk:
-                                yield chunk["token"]
-                            if "error" in chunk:
-                                yield f"\n[Error: {chunk['error']}]"
-                        except json.JSONDecodeError:
-                            continue
-    except Exception as e:
-        logger.warning("cf_ai.stream_failed", extra={"error": str(e)})
-        yield f"\n[Streaming error: {str(e)}]"
+    if WORKER_URL:
+        payload = {
+            "messages": messages,
+            "context": context,
+            "backend_user_id": backend_user_id,
+            "stream": True,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if backend_user_id:
+            headers["X-Backend-User-Id"] = str(backend_user_id)
+
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                async with client.stream("POST", f"{WORKER_URL}/api/agent/chat", json=payload, headers=headers) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                if "token" in chunk:
+                                    yield chunk["token"]
+                                if "error" in chunk:
+                                    yield f"\n[Error: {chunk['error']}]"
+                            except json.JSONDecodeError:
+                                continue
+        except Exception as e:
+            logger.warning("cf_ai.stream_failed", extra={"error": str(e)})
+            yield f"\n[Streaming error: {str(e)}]"
+    elif CF_DIRECT_API:
+        prompt = last_user_msg
+        if conv_summary:
+            prompt = f"Conversation so far:{conv_summary}\n\nUser's latest message: {last_user_msg}"
+        result = await _call_direct_api(
+            prompt,
+            system_msg or "You are the AI Cost Detective — an expert cloud infrastructure advisor. Be concise and actionable.",
+            max_tokens, temperature,
+        )
+        if result:
+            yield result
+        else:
+            yield "\n[Direct Cloudflare API unavailable]"
 
 
 async def get_conversations(backend_user_id: int) -> list[dict]:

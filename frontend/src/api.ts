@@ -511,6 +511,88 @@ export const cost = {
       }),
 }
 
+// ─── Teams / RBAC ────────────────────────────────────────────────────────────
+
+export const teams = {
+  list: () => req<import('./types').Organization[]>('/teams'),
+  get: (orgId: number) => req<import('./types').Organization>(`/teams/${orgId}`),
+  create: (name: string) =>
+    req<import('./types').Organization>('/teams', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  update: (orgId: number, name: string) =>
+    req<import('./types').Organization>(`/teams/${orgId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    }),
+  delete: (orgId: number) =>
+    req<{ message: string }>(`/teams/${orgId}`, { method: 'DELETE' }),
+
+  members: {
+    list: (orgId: number) =>
+      req<import('./types').Member[]>(`/teams/${orgId}/members`),
+    add: (orgId: number, userId: number, role: string) =>
+      req<import('./types').Member>(`/teams/${orgId}/members`, {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, role }),
+      }),
+    updateRole: (orgId: number, userId: number, role: string) =>
+      req<{ message: string }>(`/teams/${orgId}/members/${userId}/role`, {
+        method: 'PUT',
+        body: JSON.stringify({ role }),
+      }),
+    remove: (orgId: number, userId: number) =>
+      req<{ message: string }>(`/teams/${orgId}/members/${userId}`, {
+        method: 'DELETE',
+      }),
+  },
+
+  invitations: {
+    list: (orgId: number) =>
+      req<import('./types').Invitation[]>(`/teams/${orgId}/invitations`),
+    create: (orgId: number, email: string, role = 'member') =>
+      req<import('./types').Invitation>(`/teams/${orgId}/invitations`, {
+        method: 'POST',
+        body: JSON.stringify({ email, role }),
+      }),
+    accept: (token: string) =>
+      req<{ message: string }>(`/teams/invitations/${token}/accept`, {
+        method: 'POST',
+      }),
+  },
+}
+
+// ─── Alerts ──────────────────────────────────────────────────────────────────
+
+export const alerts = {
+  getConfig: () => req<import('./types').AlertConfig>('/alerts/config'),
+  updateConfig: (config: { email?: string | null; slack_webhook?: string | null; notify_on: string[] }) =>
+    req<import('./types').AlertConfig>('/alerts/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+  test: () => req<{ status: string }>('/alerts/test', { method: 'POST' }),
+  history: (limit = 50) =>
+    req<{ history: import('./types').AlertHistoryItem[] }>(`/alerts/history?limit=${limit}`),
+}
+
+// ─── RI / Savings Plans ──────────────────────────────────────────────────────
+
+export const rightsizing = {
+  riRecommendations: (accessKey = '', secretKey = '', sessionToken = '') =>
+    req<{ recommendations: import('./types').RIRecommendation[]; error?: string }>('/cost/ri-recommendations', {
+      method: 'POST',
+      body: JSON.stringify(_credBody(accessKey, secretKey, sessionToken)),
+    }),
+
+  savingsPlans: (accessKey = '', secretKey = '', sessionToken = '') =>
+    req<{ recommendations: import('./types').SavingsPlanRecommendation[]; error?: string }>('/cost/savings-plans', {
+      method: 'POST',
+      body: JSON.stringify(_credBody(accessKey, secretKey, sessionToken)),
+    }),
+}
+
 export const freeTier = {
   get: (provider: string = 'all') =>
     req<Record<string, unknown>>(`/free-tier?provider=${provider}`),
@@ -624,6 +706,7 @@ export const agent = {
     conversation_id?: number
     max_tokens?: number
     temperature?: number
+    provider?: string
   }) => req<{ response: string; conversation_id?: number }>('/agent/chat', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Conversations
